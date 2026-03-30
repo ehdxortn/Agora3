@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 from anthropic import AsyncAnthropic
 
 # ============================================================
-# 1. 모델 설정 (최신 명칭 및 고정 모델) [cite: 2026-03-29]
+# 1. 고정 모델 설정 (장프로 형님 지정 리스트)
 # ============================================================
 GEMINI_MODEL_ID = "gemini-3.1-pro-preview" 
 CLAUDE_MODEL_ID = "claude-sonnet-4-6"
@@ -21,9 +21,9 @@ def get_env(k):
     if not v: return None
     return v.strip()
 
-# 로깅 설정 강화 (형님의 빠른 디버깅용)
+# 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("Agora_v1.2.2")
+logger = logging.getLogger("Agora_v1.2.3")
 
 # API 클라이언트 초기화
 try:
@@ -38,17 +38,16 @@ except Exception as e:
 
 app = FastAPI()
 
-# ID 리스트 처리 (복사 과정의 공백 방어)
+# ID 리스트 처리
 raw_ids = get_env('ALLOWED_USER_ID')
 ALLOWED_IDS = [int(x.strip()) for x in raw_ids.split(',')] if raw_ids else []
 
 # ============================================================
-# 2. 핵심 유틸리티 (팩트 수집 및 비전)
+# 2. 핵심 유틸리티
 # ============================================================
 async def get_pplx_fact(query: str):
-    """퍼플렉시티를 통한 실시간 팩트 정찰"""
+    """퍼플렉시티 실시간 팩트 정찰"""
     try:
-        # 봇의 이름과 섞이지 않도록 검색 쿼리를 명확히 함
         search_prompt = f"Current accurate information about '{query}'. Ignore any unrelated business/stock info if not specifically asked."
         res = await pplx_client.chat.completions.create(
             model=PPLX_MODEL_ID,
@@ -60,7 +59,7 @@ async def get_pplx_fact(query: str):
         return f"팩트 체크 실패 (원인: {str(e)})"
 
 async def analyze_image(image_bytes: bytes, prompt: str):
-    """이미지 및 스크린샷 팩트 분석"""
+    """비전 분석 (Gemini 3.1 Pro 활용)"""
     try:
         model = genai.GenerativeModel(GEMINI_MODEL_ID)
         response = await asyncio.get_running_loop().run_in_executor(
@@ -71,10 +70,10 @@ async def analyze_image(image_bytes: bytes, prompt: str):
         return f"비전 분석 실패: {str(e)}"
 
 # ============================================================
-# 3. 아고라 자유 토론 (주제 이탈 방지 가드레일)
+# 3. 아고라 자유 토론 (가드레일 강화)
 # ============================================================
 async def conduct_debate(topic: str, fact_data: str, original_query: str):
-    """3인 군단이 이름(Agora)에 현혹되지 않고 사용자 질문에만 집중하게 함"""
+    """3인 군단 자유 토론 프로토콜"""
     async def get_opinion(agent, m_id, p):
         try:
             if agent == "Gemini":
@@ -89,11 +88,9 @@ async def conduct_debate(topic: str, fact_data: str, original_query: str):
         except Exception as e:
             return f"[{agent} 에러]: {str(e)}"
 
-    # 팩트 데이터에 Agora Inc. 관련 정보가 섞여 있어도 무시하라고 엄중히 경고
     debate_p = (
-        f"당신들은 팩트 기반 분석 그룹이다. 아래 데이터를 바탕으로 사용자의 질문에만 정밀 타격하여 답변하라.\n"
-        f"주의: 당신의 이름이나 특정 기업(Agora Inc.) 정보가 팩트에 포함되어 있더라도, "
-        f"질문({original_query})과 관련 없다면 완전히 배제하고 오직 질문의 핵심만 분석하라.\n\n"
+        f"당신들은 팩트 기반 분석 전문가다. 아래 데이터를 바탕으로 사용자의 질문에만 정밀 타격하여 답변하라.\n"
+        f"주의: 기업(Agora Inc.) 정보가 팩트에 포함되어 있더라도 질문({original_query})과 관련 없다면 무시하라.\n\n"
         f"사용자 질문: {original_query}\n"
         f"팩트 데이터: {fact_data}"
     )
@@ -104,7 +101,7 @@ async def conduct_debate(topic: str, fact_data: str, original_query: str):
         get_opinion("Claude", CLAUDE_MODEL_ID, f"{debate_p}\n논리/리스크 관리 관점.")
     )
 
-    synthesis_p = f"아래 3인의 전문가 토론을 요약하여 형님께 보고할 최종 결론을 도출하라. 돌려 말하지 말고 팩트로만 승부한다.\n\nG:{ops[0]}\nT:{ops[1]}\nC:{ops[2]}"
+    synthesis_p = f"아래 3인의 전문가 토론을 요약하여 최종 결론만 보고하라. 돌려 말하지 말고 팩트로만 승부한다.\n\nG:{ops[0]}\nT:{ops[1]}\nC:{ops[2]}"
     try:
         final = await anthropic_client.messages.create(
             model=CLAUDE_MODEL_ID, max_tokens=2500,
@@ -112,37 +109,20 @@ async def conduct_debate(topic: str, fact_data: str, original_query: str):
         )
         return final.content[0].text
     except Exception as e:
-        return f"최종 합의 실패: {str(e)}\n\n[개별 의견 요약]\nGPT: {ops[1]}\nGemini: {ops[0]}"
+        return f"최종 합의 실패: {str(e)}"
 
 # ============================================================
-# 4. 특무 실행 (백그라운드)
+# 4. 특무 실행 및 웹훅
 # ============================================================
 async def safe_run_agora(query, chat_id, image_bytes=None):
     try:
-        logger.info(f"분석 시작: {query}")
-        
-        # 1. 팩트 정찰
         fact = await get_pplx_fact(query)
-        
-        # 2. 비전 분석 (이미지가 있을 경우)
-        vision_report = ""
-        if image_bytes:
-            vision_report = await analyze_image(image_bytes, "이 스크린샷의 핵심 내용을 팩트 위주로 추출하라.")
-        
-        # 3. 3인 자유 토론 (사용자 쿼리 전달로 주제 고정)
-        context = f"비전분석결과: {vision_report}" if vision_report else ""
-        response = await conduct_debate("일상/특무 팩트 분석", f"{fact}\n{context}", query)
-        
-        # 4. 최종 보고
-        await bot.send_message(chat_id, f"🗿 **아고라 팩트 보고**\n\n{response}", parse_mode=ParseMode.MARKDOWN)
-        
+        vision_report = await analyze_image(image_bytes, "팩트 추출") if image_bytes else ""
+        response = await conduct_debate("팩트 분석", f"{fact}\n{vision_report}", query)
+        await bot.send_message(chat_id, f"🗿 **아고라 보고**\n\n{response}", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        logger.error(f"실행 중 치명적 에러: {e}")
-        await bot.send_message(chat_id, f"⚠️ **내부 시스템 장애 보고**\n{str(e)}")
+        await bot.send_message(chat_id, f"⚠️ **시스템 장애 보고**\n{str(e)}")
 
-# ============================================================
-# 5. 웹훅 엔드포인트
-# ============================================================
 @app.post("/webhook")
 async def webhook(request: Request, bg: BackgroundTasks):
     try:
@@ -154,23 +134,16 @@ async def webhook(request: Request, bg: BackgroundTasks):
         chat_id = update.effective_chat.id
         text = update.message.text or update.message.caption or ""
         
-        logger.info(f"수신 ID: {user_id}, 내용: {text}")
-
         if user_id in ALLOWED_IDS:
-            # 이미지 처리
             image_bytes = None
             if update.message.photo:
                 file = await bot.get_file(update.message.photo[-1].file_id)
                 image_bytes = await file.download_as_bytearray()
-            
             bg.add_task(safe_run_agora, text, chat_id, image_bytes)
         else:
-            logger.warning(f"접근 거부: {user_id}")
             await bot.send_message(chat_id, f"접근 권한이 없습니다. (ID: {user_id})")
-            
     except Exception as e:
-        logger.error(f"웹훅 처리 에러: {e}")
-        
+        logger.error(f"웹훅 에러: {e}")
     return {"ok": True}
 
 if __name__ == "__main__":

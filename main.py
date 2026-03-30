@@ -14,7 +14,7 @@ from anthropic import AsyncAnthropic
 GEMINI_MODEL_ID = "gemini-3.1-pro-preview"
 CLAUDE_MODEL_ID = "claude-sonnet-4-6"      # 형님 고정 모델
 GPT_MODEL_ID    = "gpt-5.4"               # 형님 고정 모델
-PPLX_MODEL_ID   = "sonar-reasoning"
+PPLX_MODEL_ID   = "sonar-pro"
 
 def get_env(k):
     v = os.environ.get(k)

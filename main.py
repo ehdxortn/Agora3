@@ -11,10 +11,10 @@ from anthropic import AsyncAnthropic
 # ============================================================
 # 1. 모델 설정 (최신 명칭 및 고정 모델) [cite: 2026-03-29]
 # ============================================================
-GEMINI_MODEL_ID = "gemini-1.5-pro"
-CLAUDE_MODEL_ID = "claude-3-5-sonnet-latest" 
-GPT_MODEL_ID    = "gpt-4o"
-PPLX_MODEL_ID   = "sonar-pro" # 최신 안정화 모델명 적용
+GEMINI_MODEL_ID = "gemini-3.1-pro-preview" 
+CLAUDE_MODEL_ID = "claude-sonnet-4-6"
+GPT_MODEL_ID    = "gpt-5.4"
+PPLX_MODEL_ID   = "sonar-pro"
 
 def get_env(k):
     v = os.environ.get(k)

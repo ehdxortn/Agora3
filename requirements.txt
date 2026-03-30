@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-telegram-bot
+httpx
+pandas
+TA-Lib
+numpy
+supabase
+google-generativeai
+openai
+anthropic

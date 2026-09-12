@@ -11,23 +11,35 @@ if TYPE_CHECKING:
 
 class BTCDataLoader:
  def __init__(self,db:"ResearchDB"):self.db=db
+ @staticmethod
+ def _normalize_time(frame:pd.DataFrame,column:str,source:str):
+  if column not in frame.columns:raise ValueError(f"{source} missing required timestamp column {column}")
+  parsed=pd.to_datetime(frame[column],utc=True,format="mixed",errors="coerce")
+  bad=int(parsed.isna().sum())
+  if bad:
+   if bad==len(frame):raise ValueError(f"{source}.{column} contains no parseable timestamps")
+   frame=frame.loc[~parsed.isna()].copy();parsed=parsed.loc[~parsed.isna()]
+  frame[column]=parsed
+  return frame,bad
  async def load(self):
   candles,futures,funding,onchain=await self._load_sources()
   if not candles:raise RuntimeError("candles_4h contains no BTC rows")
   df=pd.DataFrame(candles)
   for c in ["open","high","low","close","volume"]:df[c]=pd.to_numeric(df[c],errors="coerce")
-  df["open_time"]=pd.to_datetime(df["open_time"],utc=True);df=df.sort_values("open_time").drop_duplicates("open_time",keep="last");df["decision_time"]=df["open_time"]+pd.Timedelta(hours=4)
+  df,_=self._normalize_time(df,"open_time","candles_4h");df=df.sort_values("open_time").drop_duplicates("open_time",keep="last");df["decision_time"]=df["open_time"]+pd.Timedelta(hours=4)
   if futures:
-   f=pd.DataFrame(futures);f["bucket_open"]=pd.to_datetime(f["bucket_open"],utc=True)
+   f=pd.DataFrame(futures);f,_=self._normalize_time(f,"bucket_open","btc_futures_metrics_4h")
    numeric=[c for c in f.columns if c not in {"symbol","bucket_open"}]
    for c in numeric:f[c]=pd.to_numeric(f[c],errors="coerce")
-   bad=(f.get("missing_slots",0).fillna(0)>0)|(f.get("conflicting_duplicate_rows",0).fillna(0)>0)
+   missing=f["missing_slots"].fillna(0) if "missing_slots" in f.columns else pd.Series(0,index=f.index)
+   conflicts=f["conflicting_duplicate_rows"].fillna(0) if "conflicting_duplicate_rows" in f.columns else pd.Series(0,index=f.index)
+   bad=(missing>0)|(conflicts>0)
    signal_cols=[c for c in f.columns if c not in {"symbol","bucket_open","missing_slots","conflicting_duplicate_rows"}]
    f.loc[bad,signal_cols]=np.nan;f=f.sort_values("bucket_open").drop_duplicates("bucket_open",keep="last");df=df.merge(f.drop(columns=["symbol"],errors="ignore"),left_on="open_time",right_on="bucket_open",how="left")
   if funding:
-   f=pd.DataFrame(funding);f["funding_time"]=pd.to_datetime(f["funding_time"],utc=True);f["funding_rate"]=pd.to_numeric(f["funding_rate"],errors="coerce");f=f.sort_values("funding_time").drop_duplicates("funding_time",keep="last");df=pd.merge_asof(df.sort_values("decision_time"),f[["funding_time","funding_rate"]],left_on="decision_time",right_on="funding_time",direction="backward",allow_exact_matches=True)
+   f=pd.DataFrame(funding);f,_=self._normalize_time(f,"funding_time","funding_rates");f["funding_rate"]=pd.to_numeric(f["funding_rate"],errors="coerce");f=f.sort_values("funding_time").drop_duplicates("funding_time",keep="last");df=pd.merge_asof(df.sort_values("decision_time"),f[["funding_time","funding_rate"]],left_on="decision_time",right_on="funding_time",direction="backward",allow_exact_matches=True)
   if onchain:
-   o=pd.DataFrame(onchain);o["day"]=pd.to_datetime(o["day"],utc=True)
+   o=pd.DataFrame(onchain);o,_=self._normalize_time(o,"day","btc_onchain_daily_raw")
    for c in o.columns:
     if c!="day":o[c]=pd.to_numeric(o[c],errors="coerce")
    o["available_at"]=o["day"]+pd.Timedelta(days=settings.onchain_lag_days);keep=[c for c in o.columns if c!="day"]

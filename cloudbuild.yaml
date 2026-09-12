@@ -16,3 +16,5 @@ steps:
     args: ["run","jobs","deploy","${_JOB}","--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/btc-research-engine:$COMMIT_SHA","--region=${_REGION}","--command=python","--args=job.py","--task-timeout=28800s","--max-retries=1","--update-env-vars=GIT_SHA=$COMMIT_SHA,ENVIRONMENT=prod"]
 images:
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/btc-research-engine:$COMMIT_SHA"
+options:
+  logging: CLOUD_LOGGING_ONLY

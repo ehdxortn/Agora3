@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from ..config import settings
+from ..models import DirectorDecision
 
 OPENAI_PRICE = {
     "gpt-5.6-sol": (4.0, 20.0),
@@ -40,15 +41,15 @@ def _json(text: str):
         return json.loads(text)
     except json.JSONDecodeError as first_error:
         decoder = json.JSONDecoder()
-        for i, ch in enumerate(text):
-            if ch not in "[{":
+        for index, char in enumerate(text):
+            if char not in "[{":
                 continue
             try:
-                value, _ = decoder.raw_decode(text[i:])
+                value, _ = decoder.raw_decode(text[index:])
                 return value
             except json.JSONDecodeError:
                 continue
-        raise ValueError("OpenAI response did not contain a complete valid JSON value") from first_error
+        raise ValueError("OpenAI response did not contain complete JSON") from first_error
 
 
 class OpenAIProvider:
@@ -111,9 +112,7 @@ class OpenAIProvider:
         )
 
     @staticmethod
-    def _request_kwargs(
-        *, model, instructions, prompt, effort, max_output_tokens, web_search
-    ):
+    def _request_kwargs(*, model, instructions, prompt, effort, max_output_tokens, web_search):
         kwargs = {
             "model": model,
             "instructions": instructions,
@@ -123,104 +122,59 @@ class OpenAIProvider:
             "reasoning": {"effort": effort},
         }
         if web_search:
-            kwargs["tools"] = [
-                {"type": "web_search_preview", "search_context_size": "medium"}
-            ]
+            kwargs["tools"] = [{"type": "web_search_preview", "search_context_size": "medium"}]
             kwargs["include"] = ["web_search_call.action.sources"]
             kwargs["max_tool_calls"] = settings.max_web_search_calls
         return kwargs
 
-    async def ask(
-        self,
-        *,
-        run_id,
-        role,
-        model,
-        instructions,
-        prompt,
-        effort="medium",
-        max_output_tokens=6000,
-        web_search=False,
-    ):
-        kwargs = self._request_kwargs(
-            model=model,
-            instructions=instructions,
-            prompt=prompt,
-            effort=effort,
-            max_output_tokens=max_output_tokens,
-            web_search=web_search,
-        )
-        response = await self.client.responses.create(**kwargs)
-        return await self._record_response(
-            response, run_id=run_id, role=role, model=model
-        )
-
-    async def ask_typed(
-        self,
-        *,
-        output_format: type[T],
-        run_id,
-        role,
-        model,
-        instructions,
-        prompt,
-        effort="medium",
-        max_output_tokens=6000,
-        web_search=False,
-    ) -> tuple[T, ModelOutput]:
-        last_error: Exception | None = None
-        for attempt in range(2):
-            token_limit = (
-                max_output_tokens
-                if attempt == 0
-                else min(16000, max(8000, max_output_tokens * 2))
-            )
-            retry_prompt = prompt
-            if attempt:
-                retry_prompt += (
-                    "\n\nReturn the requested structured object completely and concisely. "
-                    "Prefer shorter strings and fewer optional details over truncation."
-                )
-            kwargs = self._request_kwargs(
+    async def ask(self, *, run_id, role, model, instructions, prompt, effort="medium", max_output_tokens=6000, web_search=False):
+        response = await self.client.responses.create(
+            **self._request_kwargs(
                 model=model,
                 instructions=instructions,
-                prompt=retry_prompt,
+                prompt=prompt,
                 effort=effort,
-                max_output_tokens=token_limit,
+                max_output_tokens=max_output_tokens,
                 web_search=web_search,
             )
+        )
+        return await self._record_response(response, run_id=run_id, role=role, model=model)
+
+    async def ask_typed(self, *, output_format: type[T], run_id, role, model, instructions, prompt, effort="medium", max_output_tokens=6000, web_search=False) -> tuple[T, ModelOutput]:
+        last_error: Exception | None = None
+        for attempt in range(2):
+            token_limit = max_output_tokens if attempt == 0 else min(16000, max(8000, max_output_tokens * 2))
+            retry_prompt = prompt if attempt == 0 else prompt + "\n\nReturn the requested structured object completely and concisely. Shorten prose rather than truncating required fields."
             try:
                 response = await self.client.responses.parse(
-                    **kwargs, text_format=output_format
+                    **self._request_kwargs(
+                        model=model,
+                        instructions=instructions,
+                        prompt=retry_prompt,
+                        effort=effort,
+                        max_output_tokens=token_limit,
+                        web_search=web_search,
+                    ),
+                    text_format=output_format,
                 )
-                out = await self._record_response(
-                    response, run_id=run_id, role=role, model=model
-                )
+                out = await self._record_response(response, run_id=run_id, role=role, model=model)
                 parsed = getattr(response, "output_parsed", None)
                 if parsed is not None:
                     return parsed, out
-                last_error = RuntimeError(
-                    f"OpenAI structured output was not parsed; status={out.status}"
-                )
+                last_error = RuntimeError(f"OpenAI structured output missing parsed result; status={out.status}")
             except Exception as exc:
                 last_error = exc
             try:
-                await self.db.add_event(
-                    run_id,
-                    "OPENAI_TYPED_RETRY",
-                    {
-                        "role": role,
-                        "model": model,
-                        "attempt": attempt + 1,
-                        "error": str(last_error)[:800],
-                    },
-                )
+                await self.db.add_event(run_id, "OPENAI_TYPED_RETRY", {"role": role, "model": model, "attempt": attempt + 1, "error": str(last_error)[:800]})
             except Exception:
                 pass
-        raise RuntimeError(
-            f"OpenAI structured output failed twice for role={role}: {last_error}"
-        ) from last_error
+        raise RuntimeError(f"OpenAI structured output failed twice for role={role}: {last_error}") from last_error
 
     async def ask_json(self, **kwargs):
+        # The director is a safety-critical control decision. Use the SDK's native
+        # structured-output contract rather than parsing free-form JSON text.
+        if kwargs.get("role") == "research_director":
+            parsed, out = await self.ask_typed(output_format=DirectorDecision, **kwargs)
+            return parsed.model_dump(mode="json"), out
         out = await self.ask(**kwargs)
         return _json(out.text), out

@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime,timezone
 from enum import Enum
 from typing import Any,Literal
-from pydantic import BaseModel,Field,model_validator
+from pydantic import BaseModel,Field,field_validator,model_validator
 class Confidence(str,Enum):REJECTED="REJECTED";WEAK="WEAK";CANDIDATE="CANDIDATE";ROBUST_CANDIDATE="ROBUST_CANDIDATE";PRODUCTION_CANDIDATE="PRODUCTION_CANDIDATE"
 class FeatureSpec(BaseModel):name:str=Field(min_length=1,max_length=80);family:Literal["price_return","ema_gap","rsi","atr_pct","realized_vol","volume_zscore","oi_change","oi_zscore","funding_mean","funding_zscore","taker_imbalance","ls_ratio_zscore","onchain_zscore"];lookback:int=Field(default=14,ge=1,le=720);column:str|None=None;fast:int|None=Field(default=None,ge=1,le=720);slow:int|None=Field(default=None,ge=2,le=1440)
 class ConditionSpec(BaseModel):
@@ -27,7 +27,33 @@ class ExperimentSpec(BaseModel):
   return self
 class SplitMetrics(BaseModel):observations:int=0;trades:int=0;win_rate:float|None=None;mean_net_return:float|None=None;median_net_return:float|None=None;profit_factor:float|None=None;max_drawdown:float|None=None;cumulative_return:float|None=None;sharpe_like:float|None=None
 class ExperimentResult(BaseModel):experiment_id:str;spec_hash:str;train:SplitMetrics;validation:SplitMetrics;test:SplitMetrics;parameter_stability:dict[str,Any]=Field(default_factory=dict);methodological_flags:list[str]=Field(default_factory=list);passed_minimum_gate:bool=False;holdout_revealed:bool=False;gate_basis:Literal["validation","test"]="validation";generated_at:datetime=Field(default_factory=lambda:datetime.now(timezone.utc))
-class LiteratureItem(BaseModel):title:str;url:str;source_type:Literal["peer_reviewed","preprint","institutional","exchange","github","blog","interview","other"];quality_tier:Literal["A","B","C"];published_date:str|None=None;research_question:str;claim:str;method:str;dataset_period:str|None=None;timeframe:str|None=None;costs_included:bool|None=None;leakage_risks:list[str]=Field(default_factory=list);replication_value:Literal["HIGH","MEDIUM","LOW"]="MEDIUM";tags:list[str]=Field(default_factory=list)
+class LiteratureItem(BaseModel):
+ title:str;url:str;source_type:Literal["peer_reviewed","preprint","institutional","exchange","github","blog","interview","other"];quality_tier:Literal["A","B","C"];published_date:str|None=None;research_question:str;claim:str;method:str;dataset_period:str|None=None;timeframe:str|None=None;costs_included:bool|None=None;leakage_risks:list[str]=Field(default_factory=list);replication_value:Literal["HIGH","MEDIUM","LOW"]="MEDIUM";tags:list[str]=Field(default_factory=list)
+ @field_validator("leakage_risks","tags",mode="before")
+ @classmethod
+ def normalize_lists(cls,v):
+  if v is None:return []
+  if isinstance(v,list):return [str(x).strip() for x in v if str(x).strip()]
+  if isinstance(v,str):
+   s=v.strip()
+   if not s or s.lower() in {"none","n/a","na","null","unknown"}:return []
+   return [s]
+  return [str(v)]
+ @field_validator("costs_included",mode="before")
+ @classmethod
+ def normalize_costs(cls,v):
+  if v is None or isinstance(v,bool):return v
+  if isinstance(v,(int,float)) and v in (0,1):return bool(v)
+  if isinstance(v,str):
+   s=v.strip().lower()
+   if not s or s in {"null","none","n/a","na","unknown","unclear"}:return None
+   unknown=("not reported","not stated","not specified","does not report","does not state","does not specify","does not detail","cannot determine","insufficient information")
+   if any(x in s for x in unknown):return None
+   false=("no explicit","not included","excluded","ignores transaction","without transaction","before costs","gross return","gross returns","no transaction cost","no trading cost")
+   if any(x in s for x in false):return False
+   true=("after costs","net of costs","net-of-cost","transaction costs included","trading costs included","fees included","accounts for transaction","includes transaction")
+   if any(x in s for x in true):return True
+  return None
 class DirectorDecision(BaseModel):research_status:Literal["CONTINUE","COMPLETE","BLOCKED"];confidence:Confidence;interpretation:str;critic_questions:list[str]=Field(default_factory=list);research_directive:str="";next_action:Literal["LITERATURE","REPLICATION","EXPERIMENT","ROBUSTNESS","PROMOTE","STOP"];next_experiment:ExperimentSpec|None=None;reason_for_next_action:str
 class PromotionPackage(BaseModel):contract_version:Literal["1.0"]="1.0";research_run_id:str;experiment_id:str;signal_name:str;asset:Literal["BTC"]="BTC";timeframe:Literal["4h"]="4h";decision_time:Literal["candle_close"]="candle_close";entry_time:Literal["next_candle_open"]="next_candle_open";experiment_spec:ExperimentSpec;validated_metrics:ExperimentResult;feature_contract:dict[str,Any];execution_contract:dict[str,Any];data_contract:dict[str,Any];resolved_thresholds:dict[str,float];parity_fixture:dict[str,Any];code_version:str;prompt_version:str;status:Literal["PENDING_PARITY","PARITY_PASSED","SHADOW_APPROVED","REJECTED"]="PENDING_PARITY";created_at:datetime=Field(default_factory=lambda:datetime.now(timezone.utc))
 class ParitySubmission(BaseModel):vectors:list[dict[str,Any]]=Field(min_length=1,max_length=500);relative_tolerance:float=Field(default=1e-10,gt=0,le=1e-4)

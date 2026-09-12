@@ -25,7 +25,7 @@ def _extract_json(text):
 
 @dataclass
 class ModelOutput:
-    text:str; input_tokens:int; output_tokens:int; cost_usd:float; raw_id:str|None=None
+    text:str; input_tokens:int; output_tokens:int; cost_usd:float; raw_id:str|None=None; stop_reason:str|None=None
 class AnthropicProvider:
     def __init__(self,db):
         if not settings.anthropic_api_key: raise RuntimeError("ANTHROPIC_API_KEY is required")
@@ -37,18 +37,23 @@ class AnthropicProvider:
         response=await self.client.messages.create(model=model,max_tokens=max_tokens,system=system,messages=[{"role":"user","content":prompt}],output_config={"effort":effort})
         text="\n".join(b.text for b in response.content if getattr(b,"type",None)=="text"); inp=int(getattr(response.usage,"input_tokens",0) or 0); out=int(getattr(response.usage,"output_tokens",0) or 0)
         cost=self.estimate_cost(model,inp,out); await self.db.record_cost(run_id,"anthropic",model,role,inp,out,0,cost)
-        return ModelOutput(text,inp,out,cost,getattr(response,"id",None))
+        return ModelOutput(text,inp,out,cost,getattr(response,"id",None),getattr(response,"stop_reason",None))
+    async def _parse_event(self,run_id,event_type,payload):
+        try: await self.db.add_event(run_id,event_type,payload)
+        except Exception: pass
     async def ask_json(self,**kwargs):
         out=await self.ask(**kwargs)
         try:
             return _extract_json(out.text),out
-        except (ValueError,json.JSONDecodeError):
+        except (ValueError,json.JSONDecodeError) as first:
+            await self._parse_event(kwargs.get("run_id"),"ANTHROPIC_JSON_PARSE_RETRY",{"role":kwargs.get("role"),"model":kwargs.get("model"),"stop_reason":out.stop_reason,"output_tokens":out.output_tokens,"text_chars":len(out.text),"error":str(first)[:500]})
             retry=dict(kwargs)
-            retry["prompt"]=(str(kwargs.get("prompt") or "")+"\n\nIMPORTANT: Your previous response was not parseable as complete JSON. Return ONLY one complete valid JSON value matching the requested schema. No markdown fences, no prose before or after JSON, and do not truncate the JSON.")
+            retry["prompt"]=(str(kwargs.get("prompt") or "")+"\n\nOUTPUT RECOVERY RULES: Return ONLY one complete valid JSON value matching the requested schema. No markdown fences and no prose outside JSON. Be aggressively concise: shorten string values, limit list lengths, and omit non-required detail rather than risking truncation. The closing JSON bracket/brace MUST appear before the token limit.")
             original_max=int(kwargs.get("max_tokens",6000) or 6000)
-            retry["max_tokens"]=min(12000,max(original_max+1500,int(original_max*1.25)))
+            retry["max_tokens"]=min(16000,max(8000,original_max*2))
             out2=await self.ask(**retry)
             try:
                 return _extract_json(out2.text),out2
             except (ValueError,json.JSONDecodeError) as exc:
-                raise RuntimeError("Anthropic returned invalid JSON twice; aborting this model step") from exc
+                await self._parse_event(kwargs.get("run_id"),"ANTHROPIC_JSON_PARSE_FAILED",{"role":kwargs.get("role"),"model":kwargs.get("model"),"stop_reason":out2.stop_reason,"output_tokens":out2.output_tokens,"text_chars":len(out2.text),"error":str(exc)[:500]})
+                raise RuntimeError("Anthropic returned invalid or incomplete JSON twice") from exc

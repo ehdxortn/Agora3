@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import traceback
+from datetime import datetime, timezone
 
 from research_engine.db import ResearchDB
 from research_engine.orchestrator import ResearchOrchestrator
@@ -22,13 +23,18 @@ async def _persist_fatal(run_id: str, exc: Exception) -> dict:
             "btc_research_runs",
             {
                 "status": "BLOCKED",
-                "phase": "ERROR",
                 "notes": "Research job stopped safely after an unhandled provider/infrastructure error. Inspect JOB_FATAL before resuming.",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             id=run_id,
         )
     except Exception as persist_error:
         payload["persistence_error"] = str(persist_error)[:2000]
+        try:
+            db = ResearchDB()
+            await db.add_event(run_id, "JOB_FATAL_PERSISTENCE_FAILED", {"error": payload["persistence_error"]})
+        except Exception:
+            pass
     return payload
 
 

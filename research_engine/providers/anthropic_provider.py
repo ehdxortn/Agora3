@@ -6,14 +6,23 @@ from ..config import settings
 ANTHROPIC_PRICE={"claude-opus-5":(5.0,25.0),"claude-sonnet-5":(2.0,10.0),"claude-haiku-4-5-20251001":(1.0,5.0)}
 
 def _extract_json(text):
-    text=text.strip()
+    text=(text or "").strip()
     if text.startswith("```"):
         text=re.sub(r"^```(?:json)?\s*","",text); text=re.sub(r"\s*```$","",text)
-    try:return json.loads(text)
-    except json.JSONDecodeError:
-        starts=[p for p in (text.find("{"),text.find("[")) if p>=0]
-        if not starts: raise
-        start=min(starts); end=max(text.rfind("}"),text.rfind("]")); return json.loads(text[start:end+1])
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as first_error:
+        decoder=json.JSONDecoder()
+        for i,ch in enumerate(text):
+            if ch not in "[{":
+                continue
+            try:
+                value,_=decoder.raw_decode(text[i:])
+                return value
+            except json.JSONDecodeError:
+                continue
+        raise ValueError("Anthropic response did not contain a complete valid JSON value") from first_error
+
 @dataclass
 class ModelOutput:
     text:str; input_tokens:int; output_tokens:int; cost_usd:float; raw_id:str|None=None
@@ -30,4 +39,16 @@ class AnthropicProvider:
         cost=self.estimate_cost(model,inp,out); await self.db.record_cost(run_id,"anthropic",model,role,inp,out,0,cost)
         return ModelOutput(text,inp,out,cost,getattr(response,"id",None))
     async def ask_json(self,**kwargs):
-        out=await self.ask(**kwargs); return _extract_json(out.text),out
+        out=await self.ask(**kwargs)
+        try:
+            return _extract_json(out.text),out
+        except (ValueError,json.JSONDecodeError):
+            retry=dict(kwargs)
+            retry["prompt"]=(str(kwargs.get("prompt") or "")+"\n\nIMPORTANT: Your previous response was not parseable as complete JSON. Return ONLY one complete valid JSON value matching the requested schema. No markdown fences, no prose before or after JSON, and do not truncate the JSON.")
+            original_max=int(kwargs.get("max_tokens",6000) or 6000)
+            retry["max_tokens"]=min(12000,max(original_max+1500,int(original_max*1.25)))
+            out2=await self.ask(**retry)
+            try:
+                return _extract_json(out2.text),out2
+            except (ValueError,json.JSONDecodeError) as exc:
+                raise RuntimeError("Anthropic returned invalid JSON twice; aborting this model step") from exc

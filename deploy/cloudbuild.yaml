@@ -3,7 +3,6 @@ substitutions:
   _SERVICE: btc-research-api
   _JOB: btc-research-job
   _AR_REPO: btc-research
-
 steps:
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/engine:$COMMIT_SHA", "."]
@@ -11,9 +10,9 @@ steps:
     args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/engine:$COMMIT_SHA"]
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
-    args: ["run","deploy","${_SERVICE}","--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/engine:$COMMIT_SHA","--region=${_REGION}","--platform=managed","--no-allow-unauthenticated","--set-env-vars=GOOGLE_CLOUD_PROJECT=$PROJECT_ID,CLOUD_RUN_REGION=${_REGION},CLOUD_RUN_RESEARCH_JOB=${_JOB}"]
+    args: ["run","deploy","${_SERVICE}","--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/engine:$COMMIT_SHA","--region=${_REGION}","--platform=managed","--no-allow-unauthenticated","--set-env-vars=GOOGLE_CLOUD_PROJECT=$PROJECT_ID,CLOUD_RUN_REGION=${_REGION},CLOUD_RUN_RESEARCH_JOB=${_JOB},GIT_SHA=$COMMIT_SHA"]
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
-    args: ["run","jobs","deploy","${_JOB}","--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/engine:$COMMIT_SHA","--region=${_REGION}","--command=python","--args=job.py","--task-timeout=28800s","--max-retries=1"]
+    args: ["run","jobs","deploy","${_JOB}","--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/engine:$COMMIT_SHA","--region=${_REGION}","--command=python","--args=job.py","--task-timeout=28800s","--max-retries=1","--set-env-vars=GIT_SHA=$COMMIT_SHA"]
 images:
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/engine:$COMMIT_SHA"

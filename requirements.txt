@@ -8,3 +8,4 @@ pandas==2.3.2
 numpy==2.2.6
 google-cloud-run==0.16.1
 pytest==8.4.1
+pytest-asyncio==1.1.0

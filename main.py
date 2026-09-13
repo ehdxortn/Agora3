@@ -6,22 +6,29 @@ from research_engine.config import settings
 from research_engine.db import ResearchDB
 from research_engine.models import ParitySubmission,StartRunRequest
 from research_engine.promotion import PromotionManager
-app=FastAPI(title="BTC Autonomous Research Engine",version="0.2.0")
+app=FastAPI(title="BTC Autonomous Research Engine",version="0.2.1")
 def authorize(x_research_secret:str|None=Header(default=None)):
  if not settings.api_secret:
   if settings.environment=="prod":raise HTTPException(status_code=503,detail="RESEARCH_API_SECRET is not configured")
   return
  if x_research_secret!=settings.api_secret:raise HTTPException(status_code=401,detail="invalid research secret")
 @app.get("/health")
-async def health():return {"ok":True,"service":"btc-research-engine","version":"0.2.0"}
+async def health():return {"ok":True,"service":"btc-research-engine","version":"0.2.1"}
 @app.post("/runs/start",dependencies=[Depends(authorize)])
 async def start_run(req:StartRunRequest):
  db=ResearchDB();budget=req.budget_usd or settings.run_budget_usd;run=await db.create_run(req.mission,budget,req.notes);op=await launch_job(str(run["id"]));await db.add_event(str(run["id"]),"RUN_CREATED",{"budget_usd":budget,"cloud_run_operation":op});return {"run":run,"job_operation":op,"auto_launched":op is not None}
 @app.get("/runs/{run_id}",dependencies=[Depends(authorize)])
 async def get_run(run_id:str):
- db=ResearchDB();run=await db.get_run(run_id)
- if not run:raise HTTPException(status_code=404,detail="run not found")
- ex=await db.select("btc_research_experiments","experiment_id,hypothesis,status,result,rejection_reason,created_at",limit=20,order="created_at",descending=True,run_id=run_id);pr=await db.select("btc_research_promotion_packages","experiment_id,signal_name,status,contract_hash,created_at",limit=20,order="created_at",descending=True,run_id=run_id);return {"run":run,"daily_spend_usd":await db.daily_spend(),"daily_budget_usd":settings.daily_budget_usd,"experiments":ex,"promotions":pr}
+ db=ResearchDB()
+ try:
+  run=await db.get_run(run_id)
+  if not run:raise HTTPException(status_code=404,detail="run not found")
+  ex=await db.select("btc_research_experiments","experiment_id,hypothesis,status,result,rejection_reason,created_at",limit=20,order="created_at",descending=True,run_id=run_id)
+  pr=await db.select("btc_research_promotion_packages","experiment_id,signal_name,status,contract_hash,created_at",limit=20,order="created_at",descending=True,run_id=run_id)
+  daily=await db.daily_spend()
+  return {"run":run,"daily_spend_usd":daily,"daily_budget_usd":settings.daily_budget_usd,"experiments":ex,"promotions":pr}
+ except HTTPException:raise
+ except Exception as exc:raise HTTPException(status_code=503,detail="Research database temporarily unavailable; retry shortly") from exc
 @app.post("/runs/{run_id}/pause",dependencies=[Depends(authorize)])
 async def pause(run_id:str):db=ResearchDB();await db.update("btc_research_runs",{"status":"PAUSED"},id=run_id);return {"ok":True,"status":"PAUSED"}
 @app.post("/runs/{run_id}/resume",dependencies=[Depends(authorize)])

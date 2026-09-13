@@ -15,6 +15,40 @@ class Confidence(str, Enum):
     PRODUCTION_CANDIDATE = "PRODUCTION_CANDIDATE"
 
 
+FEATURE_COLUMN_CATALOG: dict[str, tuple[str, ...]] = {
+    "oi_change": ("oi_close", "oi_value_close"),
+    "oi_zscore": ("oi_close", "oi_value_close"),
+    "funding_mean": ("funding_rate",),
+    "funding_zscore": ("funding_rate",),
+    "taker_imbalance": ("taker_log_imbalance_mean", "taker_ls_close"),
+    "ls_ratio_zscore": (
+        "global_account_ls_close",
+        "toptrader_account_ls_close",
+        "toptrader_position_ls_close",
+    ),
+    "onchain_zscore": (
+        "tx_count",
+        "block_count",
+        "fees_btc",
+        "gross_output_btc",
+        "mean_fee_sat_vb",
+        "median_fee_sat_vb",
+        "active_addresses",
+        "hash_rate",
+    ),
+}
+
+DEFAULT_FEATURE_COLUMN: dict[str, str] = {
+    "oi_change": "oi_value_close",
+    "oi_zscore": "oi_value_close",
+    "funding_mean": "funding_rate",
+    "funding_zscore": "funding_rate",
+    "taker_imbalance": "taker_log_imbalance_mean",
+    "ls_ratio_zscore": "global_account_ls_close",
+    "onchain_zscore": "active_addresses",
+}
+
+
 class FeatureSpec(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     family: Literal[
@@ -26,6 +60,19 @@ class FeatureSpec(BaseModel):
     column: str | None = None
     fast: int | None = Field(default=None, ge=1, le=720)
     slow: int | None = Field(default=None, ge=2, le=1440)
+
+    @model_validator(mode="after")
+    def validate_data_capability(self):
+        allowed = FEATURE_COLUMN_CATALOG.get(self.family)
+        if not allowed:
+            return self
+        column = self.column or DEFAULT_FEATURE_COLUMN[self.family]
+        if column not in allowed:
+            raise ValueError(
+                f"Feature family {self.family} cannot use column {column!r}; "
+                f"available columns are {', '.join(allowed)}"
+            )
+        return self
 
 
 class ConditionSpec(BaseModel):

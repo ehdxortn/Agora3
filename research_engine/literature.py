@@ -30,6 +30,7 @@ _STOPWORDS = {
     "markets", "forward", "subsequent", "using", "with", "after", "from", "into",
     "and", "the", "for", "that", "this", "only", "current", "prior", "art",
 }
+_FAILURE_STATUSES = {"REJECTED", "FAILED", "WEAK", "OOS_REJECTED"}
 
 
 def prompt(name):
@@ -146,9 +147,7 @@ class LiteratureResearcher:
         )
 
     async def source_count(self, run_id=None):
-        rows = await self.db.select(
-            "btc_research_literature", "id,url", limit=5000
-        )
+        rows = await self.db.select("btc_research_literature", "id,url", limit=5000)
         return len({r.get("url") or r.get("id") for r in rows})
 
     async def retrieve_sources(self, query: str, limit=None):
@@ -198,22 +197,27 @@ class LiteratureResearcher:
         return out
 
     async def ensure_topic_coverage(self, run_id, topic):
-        existing = await self.retrieve_sources(topic, limit=max(settings.topic_reuse_min_sources, settings.literature_retrieval_limit))
-        if len(existing) >= settings.topic_reuse_min_sources:
-            await self._event(
-                run_id,
-                "LITERATURE_MEMORY_REUSED",
-                {
-                    "topic": topic,
-                    "matched_sources": len(existing),
-                    "source_ids": [str(x.get("id")) for x in existing[:settings.literature_retrieval_limit]],
-                    "saved_web_search": True,
-                },
-            )
-            return existing
         return await self.scout_topic(run_id, topic)
 
-    async def scout_topic(self, run_id, topic):
+    async def scout_topic(self, run_id, topic, force_web=False):
+        if not force_web:
+            existing = await self.retrieve_sources(
+                topic,
+                limit=max(settings.topic_reuse_min_sources, settings.literature_retrieval_limit),
+            )
+            if len(existing) >= settings.topic_reuse_min_sources:
+                await self._event(
+                    run_id,
+                    "LITERATURE_MEMORY_REUSED",
+                    {
+                        "topic": topic,
+                        "matched_sources": len(existing),
+                        "source_ids": [str(x.get("id")) for x in existing[:settings.literature_retrieval_limit]],
+                        "saved_web_search": True,
+                    },
+                )
+                return existing
+
         worker_prompt = (
             f"Research topic: {topic}\n"
             "Search current web and scholarly/indexable sources. Every URL must be grounded "
@@ -313,7 +317,6 @@ class LiteratureResearcher:
             data = payload.get("data")
             if data and current_count - cached_count < settings.literature_map_refresh_delta:
                 return data, cached_count
-        # Import a legacy map only when it is newer than the newest literature record.
         legacy = await self.db.select(
             "btc_research_events", "payload,created_at", limit=1,
             order="created_at", descending=True, event_type="LITERATURE_MAP"
@@ -384,11 +387,12 @@ class LiteratureResearcher:
         return data
 
     def relevant_failures(self, failure_memory, directive):
-        scored = [(_failure_score(x, directive), x) for x in failure_memory]
+        pool = [x for x in failure_memory if x.get("status") in _FAILURE_STATUSES]
+        scored = [(_failure_score(x, directive), x) for x in pool]
         relevant = [x for score, x in sorted(scored, key=lambda p: p[0], reverse=True) if score > 0]
         if len(relevant) < settings.failure_retrieval_limit:
             seen = {x.get("spec_hash") for x in relevant}
-            for row in failure_memory:
+            for row in pool:
                 if row.get("spec_hash") in seen:
                     continue
                 relevant.append(row)
@@ -396,6 +400,26 @@ class LiteratureResearcher:
                 if len(relevant) >= settings.failure_retrieval_limit:
                     break
         return [_compact_failure(x) for x in relevant[:settings.failure_retrieval_limit]]
+
+    async def _global_failure_memory(self, supplied):
+        rows = await self.db.select(
+            "btc_research_experiments",
+            "id,run_id,spec_hash,hypothesis,status,rejection_reason,spec,result,created_at",
+            limit=500,
+            order="created_at",
+            descending=True,
+        )
+        merged, seen = [], set()
+        for row in list(supplied or []) + rows:
+            sh = row.get("spec_hash")
+            if sh and sh in seen:
+                continue
+            if row.get("status") not in _FAILURE_STATUSES:
+                continue
+            if sh:
+                seen.add(sh)
+            merged.append(row)
+        return merged
 
     async def propose_experiment(self, run_id, failure_memory, directive=""):
         query = directive or "replication causal volatility momentum funding open interest microstructure"
@@ -415,19 +439,21 @@ class LiteratureResearcher:
             }
             for x in sources
         ]
-        failures = self.relevant_failures(failure_memory, query)
+        global_failures = await self._global_failure_memory(failure_memory)
+        failures = self.relevant_failures(global_failures, query)
         request = (
             "RESEARCH DIRECTOR DIRECTIVE:\n" + (directive or "Replicate or extend the highest-information-value prior finding.")
             + "\n\nRETRIEVED PRIOR RESEARCH (use these ids; do not ask for the full database):\n"
             + json.dumps(source_packet, ensure_ascii=False, default=str)[:35000]
-            + "\n\nMOST RELEVANT FAILURE MEMORY (compressed):\n"
+            + "\n\nMOST RELEVANT FAILURE MEMORY FROM ALL PRIOR RUNS (compressed):\n"
             + json.dumps(failures, ensure_ascii=False, default=str)[:22000]
-            + "\n\nDesign exactly one compact, falsifiable ExperimentSpec. Reuse existing evidence instead of requesting new web research unless the retrieved packet is genuinely insufficient."
+            + "\n\nDesign exactly one compact, falsifiable ExperimentSpec. Reuse existing evidence instead of requesting new web research unless the retrieved packet is genuinely insufficient. Do not resurrect an equivalent failed specification."
         )
         await self._event(
             run_id, "RESEARCH_MEMORY_PACKET",
             {
                 "retrieved_source_count": len(source_packet), "failure_count": len(failures),
+                "global_failure_pool": len(global_failures),
                 "source_ids": [x["id"] for x in source_packet], "web_search_used": False,
             },
         )

@@ -18,19 +18,9 @@ class Confidence(str, Enum):
 class FeatureSpec(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     family: Literal[
-        "price_return",
-        "ema_gap",
-        "rsi",
-        "atr_pct",
-        "realized_vol",
-        "volume_zscore",
-        "oi_change",
-        "oi_zscore",
-        "funding_mean",
-        "funding_zscore",
-        "taker_imbalance",
-        "ls_ratio_zscore",
-        "onchain_zscore",
+        "price_return", "ema_gap", "rsi", "atr_pct", "realized_vol",
+        "volume_zscore", "oi_change", "oi_zscore", "funding_mean",
+        "funding_zscore", "taker_imbalance", "ls_ratio_zscore", "onchain_zscore",
     ]
     lookback: int = Field(default=14, ge=1, le=720)
     column: str | None = None
@@ -59,9 +49,7 @@ class ExitSpec(BaseModel):
 
     @model_validator(mode="after")
     def stop_target_requires_both(self):
-        if self.mode == "stop_target" and (
-            self.stop_loss_pct is None or self.take_profit_pct is None
-        ):
+        if self.mode == "stop_target" and (self.stop_loss_pct is None or self.take_profit_pct is None):
             raise ValueError("stop_target requires stop and target")
         return self
 
@@ -109,8 +97,12 @@ class ExperimentResult(BaseModel):
     spec_hash: str
     train: SplitMetrics
     validation: SplitMetrics
-    test: SplitMetrics
+    # None means the chronological final holdout is sealed. No observations, signal counts,
+    # feature distributions, or outcomes from that segment are exposed during exploration.
+    test: SplitMetrics | None = None
     parameter_stability: dict[str, Any] = Field(default_factory=dict)
+    pre_holdout_robustness: dict[str, Any] = Field(default_factory=dict)
+    cost_stress: dict[str, Any] = Field(default_factory=dict)
     methodological_flags: list[str] = Field(default_factory=list)
     passed_minimum_gate: bool = False
     holdout_revealed: bool = False
@@ -122,14 +114,8 @@ class LiteratureItem(BaseModel):
     title: str
     url: str
     source_type: Literal[
-        "peer_reviewed",
-        "preprint",
-        "institutional",
-        "exchange",
-        "github",
-        "blog",
-        "interview",
-        "other",
+        "peer_reviewed", "preprint", "institutional", "exchange", "github",
+        "blog", "interview", "other",
     ]
     quality_tier: Literal["A", "B", "C"]
     published_date: str | None = None
@@ -168,43 +154,13 @@ class LiteratureItem(BaseModel):
             text = value.strip().lower()
             if not text or text in {"null", "none", "n/a", "na", "unknown", "unclear"}:
                 return None
-            unknown = (
-                "not reported",
-                "not stated",
-                "not specified",
-                "does not report",
-                "does not state",
-                "does not specify",
-                "does not detail",
-                "cannot determine",
-                "insufficient information",
-            )
+            unknown = ("not reported", "not stated", "not specified", "does not report", "does not state", "does not specify", "does not detail", "cannot determine", "insufficient information")
             if any(x in text for x in unknown):
                 return None
-            false_values = (
-                "no explicit",
-                "not included",
-                "excluded",
-                "ignores transaction",
-                "without transaction",
-                "before costs",
-                "gross return",
-                "gross returns",
-                "no transaction cost",
-                "no trading cost",
-            )
+            false_values = ("no explicit", "not included", "excluded", "ignores transaction", "without transaction", "before costs", "gross return", "gross returns", "no transaction cost", "no trading cost")
             if any(x in text for x in false_values):
                 return False
-            true_values = (
-                "after costs",
-                "net of costs",
-                "net-of-cost",
-                "transaction costs included",
-                "trading costs included",
-                "fees included",
-                "accounts for transaction",
-                "includes transaction",
-            )
+            true_values = ("after costs", "net of costs", "net-of-cost", "transaction costs included", "trading costs included", "fees included", "accounts for transaction", "includes transaction")
             if any(x in text for x in true_values):
                 return True
         return None
@@ -237,9 +193,7 @@ class DirectorDecision(BaseModel):
     interpretation: str
     critic_questions: list[str] = Field(default_factory=list)
     research_directive: str = ""
-    next_action: Literal[
-        "LITERATURE", "REPLICATION", "EXPERIMENT", "ROBUSTNESS", "PROMOTE", "STOP"
-    ]
+    next_action: Literal["LITERATURE", "REPLICATION", "EXPERIMENT", "ROBUSTNESS", "PROMOTE", "STOP"]
     next_experiment: ExperimentSpec | None = None
     reason_for_next_action: str
 
@@ -262,9 +216,7 @@ class PromotionPackage(BaseModel):
     parity_fixture: dict[str, Any]
     code_version: str
     prompt_version: str
-    status: Literal[
-        "PENDING_PARITY", "PARITY_PASSED", "SHADOW_APPROVED", "REJECTED"
-    ] = "PENDING_PARITY"
+    status: Literal["PENDING_PARITY", "PARITY_PASSED", "SHADOW_APPROVED", "REJECTED"] = "PENDING_PARITY"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

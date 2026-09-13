@@ -89,12 +89,18 @@ class ExperimentRunner:
   if len(u)<400:raise ValueError(f"Insufficient usable observations: {len(u)}")
   n=len(u);te=int(n*spec.train_fraction);ve=int(n*(spec.train_fraction+spec.validation_fraction));e=spec.embargo_bars;slices=[(0,max(0,te-e)),(min(n,te+e),max(min(n,ve-e),min(n,te+e))),(min(n,ve+e),n)]
   if min(b-a for a,b in slices)<=20:raise ValueError("split/embargo leaves too little data")
-  th=self._resolve_thresholds(u.iloc[slices[0][0]:slices[0][1]],spec.conditions);sig=self._build_signal(u,spec.conditions,th);analysis_end=n if reveal_holdout else slices[2][0];allr=self._simulate(u.iloc[:analysis_end].reset_index(drop=True),sig.iloc[:analysis_end].reset_index(drop=True),spec);tr=self._returns_for_range(allr,*slices[0]);vr=self._returns_for_range(allr,*slices[1]);xr=self._returns_for_range(allr,*slices[2]) if reveal_holdout else []
+  th=self._resolve_thresholds(u.iloc[slices[0][0]:slices[0][1]],spec.conditions);sig=self._build_signal(u,spec.conditions,th);analysis_end=n if reveal_holdout else slices[2][0];allr=self._simulate(u.iloc[:analysis_end].reset_index(drop=True),sig.iloc[:analysis_end].reset_index(drop=True),spec);trades_tr=self._trades_for_range(allr,*slices[0]);trades_vr=self._trades_for_range(allr,*slices[1]);tr=[x[2] for x in trades_tr];vr=[x[2] for x in trades_vr]
+  if reveal_holdout:
+   trades_xr=self._trades_for_range(allr,*slices[2]);xr=[x[2] for x in trades_xr];test_metrics=self._metrics(xr,slices[2][1]-slices[2][0])
+  else:
+   xr=[];trades_xr=[];test_metrics=None
   flags=[] if reveal_holdout else ["SEALED_HOLDOUT_NOT_EVALUATED"]
-  if reveal_holdout and len(xr)<30:flags.append("LOW_OOS_SAMPLE")
+  if reveal_holdout and len(xr)<settings.rare_event_min_validation_trades:flags.append("LOW_OOS_SAMPLE")
   if reveal_holdout and tr and xr and np.mean(tr)>0>=np.mean(xr):flags.append("OOS_SIGN_FLIP")
   if reveal_holdout and vr and xr and np.mean(vr)*np.mean(xr)<0:flags.append("VALIDATION_TEST_INSTABILITY")
-  r=ExperimentResult(experiment_id=eid,spec_hash=sh,train=self._metrics(tr,slices[0][1]-slices[0][0]),validation=self._metrics(vr,slices[1][1]-slices[1][0]),test=self._metrics(xr,slices[2][1]-slices[2][0]),methodological_flags=flags,holdout_revealed=reveal_holdout,gate_basis="test" if reveal_holdout else "validation")
+  r=ExperimentResult(experiment_id=eid,spec_hash=sh,train=self._metrics(tr,slices[0][1]-slices[0][0]),validation=self._metrics(vr,slices[1][1]-slices[1][0]),test=test_metrics,methodological_flags=flags,holdout_revealed=reveal_holdout,gate_basis="test" if reveal_holdout else "validation")
+  r.pre_holdout_robustness=self._pre_holdout_robustness(u,spec,slices,trades_vr)
+  r.cost_stress=self._cost_stress(u,sig,spec,slices[1])
   if stability:r.parameter_stability=self._stability_sweep(spec,reveal_holdout)
   r.passed_minimum_gate=self._minimum_gate(r,"test" if reveal_holdout else "validation");return r
  def _resolve_thresholds(self,train,conds):return {i:(float(c.value) if c.threshold_type=="absolute" else float(train[c.feature].quantile(c.value))) for i,c in enumerate(conds)}
@@ -108,8 +114,8 @@ class ExperimentRunner:
    elif c.op=="lt":s&=x<t
    else:s&=x<=t
   return s.fillna(False)
- def _simulate(self,df,signal,spec):
-  out=[];i=0;cost=(spec.fee_bps+spec.slippage_bps)/10000
+ def _simulate(self,df,signal,spec,total_cost_bps=None):
+  out=[];i=0;cost=((spec.fee_bps+spec.slippage_bps) if total_cost_bps is None else total_cost_bps)/10000
   while i<len(df)-2:
    if not bool(signal.iloc[i]):i+=1;continue
    ei=i+1;entry=float(df.iloc[ei].open)
@@ -126,27 +132,67 @@ class ExperimentRunner:
    out.append((i,xi,float(gross-cost)));i=max(i+1,xi+1)
   return out
  @staticmethod
+ def _trades_for_range(allr,a,b):return [(i,x,r) for i,x,r in allr if a<=i<b and x<b]
+ @staticmethod
  def _returns_for_range(allr,a,b):return [r for i,x,r in allr if a<=i<b and x<b]
  @staticmethod
  def _metrics(rs,obs):
   if not rs:return SplitMetrics(observations=obs,trades=0)
   a=np.asarray(rs,float);w=a[a>0];l=a[a<=0];eq=np.cumprod(1+a);dd=eq/np.maximum.accumulate(eq)-1;pf=float(w.sum()/abs(l.sum())) if l.sum()<0 else None;sd=float(a.std(ddof=1)) if len(a)>1 else 0
   return SplitMetrics(observations=obs,trades=len(a),win_rate=float((a>0).mean()),mean_net_return=float(a.mean()),median_net_return=float(np.median(a)),profit_factor=pf,max_drawdown=float(dd.min()),cumulative_return=float(eq[-1]-1),sharpe_like=float(a.mean()/sd*math.sqrt(len(a))) if sd>0 else None)
+ @staticmethod
+ def _event_clusters(trades,cluster_bars):
+  idx=sorted(i for i,_,_ in trades)
+  if not idx:return 0
+  n=1;last=idx[0]
+  for x in idx[1:]:
+   if x-last>cluster_bars:n+=1
+   last=x
+  return n
+ def _pre_holdout_robustness(self,u,spec,slices,validation_trades):
+  accessible_end=slices[2][0];folds=max(2,settings.walk_forward_folds);warm=max(400,int(accessible_end*.5));remaining=accessible_end-warm
+  cluster_bars=max(12,spec.exit.horizon_bars*2);out=[];pooled=[];pooled_trades=[]
+  if remaining>folds*(spec.embargo_bars*2+20):
+   width=remaining//folds
+   for k in range(folds):
+    boundary=warm+k*width;eval_end=accessible_end if k==folds-1 else warm+(k+1)*width;train_end=max(100,boundary-spec.embargo_bars);eval_start=min(eval_end,boundary+spec.embargo_bars)
+    if eval_end-eval_start<=20:continue
+    try:
+     th=self._resolve_thresholds(u.iloc[:train_end],spec.conditions);sig=self._build_signal(u.iloc[:eval_end],spec.conditions,th);sim=self._simulate(u.iloc[:eval_end].reset_index(drop=True),sig.reset_index(drop=True),spec);ft=self._trades_for_range(sim,eval_start,eval_end);fr=[x[2] for x in ft];m=self._metrics(fr,eval_end-eval_start);pooled.extend(fr);pooled_trades.extend(ft);out.append({"fold":k+1,"train_end_index":train_end,"eval_start_index":eval_start,"eval_end_index":eval_end,"metrics":m.model_dump(mode="json"),"event_clusters":self._event_clusters(ft,cluster_bars)})
+    except Exception as exc:out.append({"fold":k+1,"error":str(exc)[:500]})
+  valid=[x for x in out if "metrics" in x];positive=[x for x in valid if (x["metrics"].get("mean_net_return") or 0)>0]
+  pooled_metrics=self._metrics(pooled,sum(max(0,x["eval_end_index"]-x["eval_start_index"]) for x in valid))
+  return {"method":"expanding_walk_forward_pre_holdout","folds":out,"positive_fold_fraction":len(positive)/len(valid) if valid else None,"pooled":pooled_metrics.model_dump(mode="json"),"pooled_event_clusters":self._event_clusters(pooled_trades,cluster_bars),"validation_event_clusters":self._event_clusters(validation_trades,cluster_bars),"cluster_bars":cluster_bars}
+ def _cost_stress(self,u,signal,spec,validation_slice):
+  baseline=float(spec.fee_bps+spec.slippage_bps);levels=sorted(set([baseline,float(settings.cost_stress_bps),30.0]));result={"semantics":"total_round_trip_bps","validation":{}}
+  for bps in levels:
+   sim=self._simulate(u.iloc[:validation_slice[1]].reset_index(drop=True),signal.iloc[:validation_slice[1]].reset_index(drop=True),spec,total_cost_bps=bps);rs=self._returns_for_range(sim,*validation_slice);result["validation"][f"{bps:g}bps"]=self._metrics(rs,validation_slice[1]-validation_slice[0]).model_dump(mode="json")
+  return result
  def _stability_sweep(self,spec,reveal):
   vs=[];key="test" if reveal else "validation"
-  for d in (-.05,.05):
-   c=spec.model_copy(deep=True);changed=False
-   for x in c.conditions:
-    if x.threshold_type=="train_quantile":x.value=min(.95,max(.05,x.value+d));changed=True
-   if not changed:
-    for x in c.conditions:
-     if x.value!=0:x.value*=1+d;changed=True
-   if changed:
+  for idx,base in enumerate(spec.conditions):
+   deltas=(-.05,.05)
+   for d in deltas:
+    c=spec.model_copy(deep=True);x=c.conditions[idx]
+    if x.threshold_type=="train_quantile":x.value=min(.95,max(.05,x.value+d))
+    elif x.value!=0:x.value*=1+d
+    else:continue
     try:
-     rr=self.run(c,False,reveal);m=getattr(rr,key);vs.append({"delta":d,"basis":key,"trades":m.trades,"mean_net_return":m.mean_net_return,"profit_factor":m.profit_factor})
-    except Exception as exc:vs.append({"delta":d,"error":str(exc)})
-  pos=[v for v in vs if (v.get("mean_net_return") or 0)>0];return {"basis":key,"variants":vs,"positive_neighbor_fraction":len(pos)/len(vs) if vs else None}
- @staticmethod
- def _minimum_gate(r,basis):
-  m=getattr(r,basis);st=r.parameter_stability.get("positive_neighbor_fraction")
-  return bool(m.trades>=settings.min_oos_trades and (m.mean_net_return or 0)>0 and (m.profit_factor or 0)>1.10 and (m.max_drawdown is not None and m.max_drawdown>=-settings.max_drawdown_gate) and (st is None or st>=.5))
+     rr=self.run(c,False,reveal);m=getattr(rr,key)
+     if m is None:raise ValueError("sealed holdout has no metrics")
+     vs.append({"condition_index":idx,"feature":base.feature,"delta":d,"basis":key,"trades":m.trades,"mean_net_return":m.mean_net_return,"profit_factor":m.profit_factor})
+    except Exception as exc:vs.append({"condition_index":idx,"feature":base.feature,"delta":d,"error":str(exc)[:500]})
+  usable=[v for v in vs if "mean_net_return" in v];pos=[v for v in usable if (v.get("mean_net_return") or 0)>0];return {"basis":key,"mode":"one_axis_at_a_time","variants":vs,"positive_neighbor_fraction":len(pos)/len(usable) if usable else None}
+ def _minimum_gate(self,r,basis):
+  m=getattr(r,basis)
+  if m is None:return False
+  train=r.train;val=r.validation;st=r.parameter_stability.get("positive_neighbor_fraction")
+  train_ok=bool(train.trades>=settings.rare_event_min_validation_trades and (train.mean_net_return or 0)>0 and (train.profit_factor or 0)>1.02)
+  core=bool((m.mean_net_return or 0)>0 and (m.profit_factor or 0)>1.10 and m.max_drawdown is not None and m.max_drawdown>=-settings.max_drawdown_gate and (st is None or st>=.5))
+  if not (train_ok and core):return False
+  if basis=="test":
+   validation_ok=bool(val.trades>=settings.rare_event_min_validation_trades and (val.mean_net_return or 0)>0 and (val.profit_factor or 0)>1.05)
+   return bool(validation_ok and m.trades>=settings.rare_event_min_validation_trades)
+  if m.trades>=settings.min_oos_trades:return True
+  rob=r.pre_holdout_robustness;wf=rob.get("pooled") or {};stress=(r.cost_stress.get("validation") or {}).get(f"{float(settings.cost_stress_bps):g}bps") or {};rare_ok=bool(m.trades>=settings.rare_event_min_validation_trades and (rob.get("validation_event_clusters") or 0)>=settings.min_event_clusters and (wf.get("trades") or 0)>=settings.rare_event_min_validation_trades*2 and (wf.get("mean_net_return") or 0)>0 and (wf.get("profit_factor") or 0)>1.05 and (rob.get("positive_fold_fraction") or 0)>=settings.min_positive_wf_fraction and (stress.get("mean_net_return") or 0)>0)
+  return rare_ok

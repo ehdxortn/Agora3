@@ -6,6 +6,7 @@ import os
 import traceback
 from datetime import datetime, timezone
 
+from research_engine.controller_cycle import ControllerResearchCycle
 from research_engine.db import ResearchDB
 from research_engine.orchestrator import ResearchOrchestrator
 
@@ -32,10 +33,19 @@ async def _persist_fatal(run_id: str, exc: Exception) -> dict:
         payload["persistence_error"] = str(persist_error)[:2000]
         try:
             db = ResearchDB()
-            await db.add_event(run_id, "JOB_FATAL_PERSISTENCE_FAILED", {"error": payload["persistence_error"]})
+            await db.add_event(
+                run_id,
+                "JOB_FATAL_PERSISTENCE_FAILED",
+                {"error": payload["persistence_error"]},
+            )
         except Exception:
             pass
     return payload
+
+
+def _controller_mode_enabled() -> bool:
+    value = os.getenv("CHATGPT_CONTROLLER_MODE", "true").strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 async def main() -> None:
@@ -43,11 +53,15 @@ async def main() -> None:
     if not run_id:
         raise RuntimeError("RESEARCH_RUN_ID is required")
     try:
-        orchestrator = ResearchOrchestrator()
-        outputs = await orchestrator.run_until_stop(run_id)
-        print(json.dumps(outputs, ensure_ascii=False, default=str))
+        if _controller_mode_enabled():
+            output = await ControllerResearchCycle().run_one(run_id)
+            print(json.dumps([output], ensure_ascii=False, default=str))
+        else:
+            orchestrator = ResearchOrchestrator()
+            outputs = await orchestrator.run_until_stop(run_id)
+            print(json.dumps(outputs, ensure_ascii=False, default=str))
     except Exception as exc:
-        # Exit cleanly after persisting a fail-closed state. A formatting/provider
+        # Exit cleanly after persisting a fail-closed state. A provider or formatting
         # failure must not leave the run marked RUNNING or expose the sealed holdout.
         payload = await _persist_fatal(run_id, exc)
         print(

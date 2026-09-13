@@ -3,6 +3,7 @@ substitutions:
   _SERVICE: agora3
   _JOB: btc-research-job
   _AR_REPO: cloud-run-source-deploy
+  _SCHEDULER_JOB: agora3-research-hourly
 steps:
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/btc-research-engine:$COMMIT_SHA", "."]
@@ -14,6 +15,51 @@ steps:
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args: ["run","jobs","deploy","${_JOB}","--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/btc-research-engine:$COMMIT_SHA","--region=${_REGION}","--command=python","--args=job.py","--task-timeout=28800s","--max-retries=1","--update-env-vars=GIT_SHA=$COMMIT_SHA,ENVIRONMENT=prod"]
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud services enable cloudscheduler.googleapis.com --project="$PROJECT_ID" --quiet
+
+        SERVICE_URL="$(gcloud run services describe "${_SERVICE}" --region="${_REGION}" --format='value(status.url)')"
+        RUNTIME_SA="$(gcloud run services describe "${_SERVICE}" --region="${_REGION}" --format='value(spec.template.spec.serviceAccountName)')"
+        if [ -z "$${RUNTIME_SA}" ]; then
+          PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          RUNTIME_SA="$${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+        fi
+
+        # Scheduler authenticates to the private Cloud Run service with OIDC. The service's
+        # runtime identity then launches the research Job using the permissions it already has.
+        gcloud run services add-iam-policy-binding "${_SERVICE}" \
+          --region="${_REGION}" \
+          --member="serviceAccount:$${RUNTIME_SA}" \
+          --role="roles/run.invoker" \
+          --quiet
+
+        if gcloud scheduler jobs describe "${_SCHEDULER_JOB}" --location="${_REGION}" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http "${_SCHEDULER_JOB}" \
+            --location="${_REGION}" \
+            --schedule="5 * * * *" \
+            --time-zone="Asia/Seoul" \
+            --uri="$${SERVICE_URL}/scheduler/tick" \
+            --http-method=POST \
+            --oidc-service-account-email="$${RUNTIME_SA}" \
+            --oidc-token-audience="$${SERVICE_URL}" \
+            --attempt-deadline=60s \
+            --quiet
+        else
+          gcloud scheduler jobs create http "${_SCHEDULER_JOB}" \
+            --location="${_REGION}" \
+            --schedule="5 * * * *" \
+            --time-zone="Asia/Seoul" \
+            --uri="$${SERVICE_URL}/scheduler/tick" \
+            --http-method=POST \
+            --oidc-service-account-email="$${RUNTIME_SA}" \
+            --oidc-token-audience="$${SERVICE_URL}" \
+            --attempt-deadline=60s \
+            --quiet
+        fi
 images:
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/btc-research-engine:$COMMIT_SHA"
 options:

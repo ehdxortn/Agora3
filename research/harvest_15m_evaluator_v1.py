@@ -109,7 +109,10 @@ def simulate_asset(frame: pd.DataFrame, signal_col: str) -> list[dict[str, Any]]
     f = frame.reset_index(drop=True)
     out: list[dict[str, Any]] = []
     i = 0
-    while i < len(f) - HOLD_BARS - 1:
+    # A signal at i is valid when the next bar plus HOLD_BARS-1 further bars
+    # still fit in the frame. Therefore the last valid signal index is
+    # len(f)-HOLD_BARS-1, which requires a strict bound of len(f)-HOLD_BARS.
+    while i < len(f) - HOLD_BARS:
         if not bool(f.at[i, signal_col]):
             i += 1
             continue

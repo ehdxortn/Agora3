@@ -1,0 +1,13 @@
+{
+  "status": "FROZEN_BEFORE_HARVEST_PRIMARY_VALIDATION",
+  "purpose": "Permit a public Binance archive reconstruction only when it is byte-canonically equivalent to the Supabase candles_4h BTC slice used by the Harvest contract.",
+  "canonical_source": "Supabase public.candles_4h where symbol=BTC",
+  "range_start_utc": "2024-12-01T00:00:00Z",
+  "range_end_exclusive_utc": "2026-07-01T00:00:00Z",
+  "row_count": 3462,
+  "sha256": "5eb451baceaf4a975c7e8bd250e6101b34a4a229e4cd174df42a64a5acacf767",
+  "serialization": "epoch_ms,open_8dp,high_8dp,low_8dp,close_8dp,volume_8dp joined by LF in ascending open_time order, with no trailing LF",
+  "sql_hash_method": "encode(digest(string_agg(canonical_line, E'\\n' order by open_time),'sha256'),'hex')",
+  "created_at_note": "Computed through the connected Supabase SQL control plane on 2026-09-19 KST before any 2025-01-01..2026-06-30 Harvest v1 primary outcome score was opened.",
+  "authority": "data parity only; no trading or predictive authority"
+}

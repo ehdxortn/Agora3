@@ -214,7 +214,9 @@ def join_causal(candles: pd.DataFrame, regimes: pd.DataFrame, ticks: TickSchedul
         direction="backward",
         allow_exact_matches=True,
     )
-    out["tick_krw"] = [ticks.tick(str(s), t, float(p)) for s, t, p in zip(out["symbol"], out["decision_time"], out["open"])]
+    # The evaluator enters at the row open, so historical tick policy must be
+    # evaluated at that same entry instant, not at the row's later close.
+    out["tick_krw"] = [ticks.tick(str(s), t, float(p)) for s, t, p in zip(out["symbol"], out["open_time"], out["open"])]
     out["tick_bp"] = out["tick_krw"] / out["open"] * 10000.0
     return out
 

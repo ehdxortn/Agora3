@@ -25,6 +25,7 @@ ROUND_TRIP_FEE_BPS = 10.0
 BOOTSTRAP_SEED = 150919
 BOOTSTRAP_SAMPLES = 10_000
 BLOCK_DAYS = 7
+STEP = pd.Timedelta(minutes=15)
 
 
 def sha256_file(path: Path) -> str:
@@ -62,14 +63,26 @@ def metrics(trades: pd.DataFrame, column: str) -> dict[str, Any]:
     }
 
 
+def calendar_day_trade_lists(trades: pd.DataFrame, column: str) -> tuple[list[pd.Timestamp], list[list[float]]]:
+    """Return every calendar day in the trade span, preserving no-trade days."""
+    if trades.empty:
+        return [], []
+    daily = (
+        trades.assign(day=trades["entry_time"].dt.floor("D"))
+        .groupby("day", sort=True)[column]
+        .agg(list)
+    )
+    full_days = pd.date_range(daily.index.min(), daily.index.max(), freq="D")
+    values = [list(daily.get(day, [])) for day in full_days]
+    return full_days.to_list(), values
+
+
 def daily_block_bootstrap_lb05(trades: pd.DataFrame, column: str) -> float | None:
     if trades.empty:
         return None
-    daily = trades.assign(day=trades["entry_time"].dt.floor("D")).groupby("day", sort=True)[column].agg(list)
-    days = daily.index.to_list()
+    days, values = calendar_day_trade_lists(trades, column)
     if len(days) < BLOCK_DAYS:
         return None
-    values = [daily.loc[d] for d in days]
     rng = np.random.default_rng(BOOTSTRAP_SEED)
     max_start = len(days) - BLOCK_DAYS
     blocks_needed = int(np.ceil(len(days) / BLOCK_DAYS))
@@ -94,8 +107,16 @@ def prepare_asset(frame: pd.DataFrame) -> pd.DataFrame:
     f["median_abs_ret32"] = f["abs_ret15"].shift(1).rolling(32, min_periods=32).median()
     width = f["box_high"] - f["box_low"]
     f["box_position"] = (f["close"] - f["box_low"]) / width.replace(0, np.nan)
+
+    # The 32-bar signal history must represent exactly 32 consecutive 15m
+    # intervals. A missing Upbit candle must not silently stretch a row-count
+    # window into a longer wall-clock lookback.
+    step_ok = f["open_time"].diff().eq(STEP)
+    f["history_contiguous_32"] = step_ok.rolling(32, min_periods=32).sum().eq(32)
+
     common = (
         (width > 0)
+        & f["history_contiguous_32"]
         & (f["box_position"] <= 0.15)
         & (f["ret15"] < 0)
         & (f["abs_ret15"] >= f["median_abs_ret32"])
@@ -118,6 +139,23 @@ def simulate_asset(frame: pd.DataFrame, signal_col: str) -> list[dict[str, Any]]
             continue
         entry_i = i + 1
         last_i = entry_i + HOLD_BARS - 1
+
+        # Entry must be exactly the next 15m open and the full 60m evaluation
+        # path must be consecutive. We skip rather than impute across gaps.
+        times = pd.to_datetime(f.loc[i:last_i, "open_time"], utc=True)
+        signal_decision = pd.Timestamp(f.at[i, "decision_time"])
+        if signal_decision.tzinfo is None:
+            signal_decision = signal_decision.tz_localize("UTC")
+        else:
+            signal_decision = signal_decision.tz_convert("UTC")
+        if (
+            len(times) != HOLD_BARS + 1
+            or not times.diff().dropna().eq(STEP).all()
+            or signal_decision != pd.Timestamp(f.at[entry_i, "open_time"])
+        ):
+            i += 1
+            continue
+
         entry = float(f.at[entry_i, "open"])
         tick = float(f.at[entry_i, "tick_krw"])
         if not np.isfinite(entry) or entry <= 0 or not np.isfinite(tick) or tick <= 0:
@@ -159,7 +197,7 @@ def simulate_asset(frame: pd.DataFrame, signal_col: str) -> list[dict[str, Any]]
                 "symbol": str(f.at[i, "symbol"]),
                 "signal_time": f.at[i, "decision_time"],
                 "entry_time": f.at[entry_i, "open_time"],
-                "exit_time": f.at[exit_i, "open_time"] + pd.Timedelta(minutes=15),
+                "exit_time": f.at[exit_i, "open_time"] + STEP,
                 "btc_regime": str(f.at[i, "btc_regime"]),
                 "entry": entry,
                 "tick_krw": tick,
@@ -200,6 +238,29 @@ def evaluate(input_csv: Path) -> tuple[dict[str, Any], pd.DataFrame]:
     unexpected = sorted(set(f["symbol"]) - set(UNIVERSE))
     if unexpected:
         raise ValueError(f"unexpected symbols: {unexpected}")
+
+    # Fail closed on malformed primary inputs. Genuine no-trade candle gaps are
+    # allowed in the file but cannot participate in a signal or execution path.
+    if f.duplicated(["symbol", "open_time"]).any():
+        raise ValueError("duplicate symbol/open_time rows")
+    if not (f["decision_time"] == f["open_time"] + STEP).all():
+        raise ValueError("decision_time must equal open_time + 15m")
+    if f["btc_regime"].isna().any():
+        raise ValueError("null BTC regime rows")
+    bad_regime = sorted(set(f["btc_regime"]) - {"RANGE", "TRANSITION", "STRONG_UP", "STRONG_DOWN"})
+    if bad_regime:
+        raise ValueError(f"unexpected BTC regimes: {bad_regime}")
+    if (~np.isfinite(f[["open", "high", "low", "close", "tick_krw", "er24", "ret24"]].to_numpy(dtype=float))).any():
+        raise ValueError("non-finite numeric input")
+    if (f["tick_krw"] <= 0).any():
+        raise ValueError("non-positive tick size")
+    incoherent = (
+        (f["high"] < f[["open", "close"]].max(axis=1))
+        | (f["low"] > f[["open", "close"]].min(axis=1))
+        | (f["high"] < f["low"])
+    )
+    if incoherent.any():
+        raise ValueError("OHLC-incoherent rows")
 
     primary_rows: list[dict[str, Any]] = []
     strong_rows: list[dict[str, Any]] = []
@@ -243,7 +304,10 @@ def evaluate(input_csv: Path) -> tuple[dict[str, Any], pd.DataFrame]:
     shares = trades["symbol"].value_counts(normalize=True).to_dict() if not trades.empty else {}
     qualifying = [s for s, m in by_asset.items() if m.get("trades", 0) >= 20]
     positive = [s for s in qualifying if (by_asset[s].get("mean_net_return") or 0.0) > 0]
+    bootstrap_days, _ = calendar_day_trade_lists(trades, "net_return") if not trades.empty else ([], [])
     lb05 = daily_block_bootstrap_lb05(trades, "net_return") if not trades.empty else None
+    sd_mean = sd_m.get("mean_net_return")
+    rt_mean = rt_m.get("mean_net_return")
 
     gates = {
         "trades_ge_150": len(trades) >= 150,
@@ -256,8 +320,8 @@ def evaluate(input_csv: Path) -> tuple[dict[str, Any], pd.DataFrame]:
         "second_half_mean_positive": (second_m.get("mean_net_return") or 0.0) > 0,
         "four_of_six_assets_positive": len(positive) >= 4,
         "one_extra_tick_stress_nonnegative": (stress.get("mean_net_return") if stress.get("mean_net_return") is not None else -1.0) >= 0,
-        "strong_down_not_below_minus15bp_if_n30": sd_m.get("trades", 0) < 30 or (sd_m.get("mean_net_return") or -1.0) > -0.0015,
-        "range_transition_not_below_minus15bp_if_n30": rt_m.get("trades", 0) < 30 or (rt_m.get("mean_net_return") or -1.0) > -0.0015,
+        "strong_down_not_below_minus15bp_if_n30": sd_m.get("trades", 0) < 30 or (sd_mean is not None and sd_mean > -0.0015),
+        "range_transition_not_below_minus15bp_if_n30": rt_m.get("trades", 0) < 30 or (rt_mean is not None and rt_mean > -0.0015),
     }
 
     result = {
@@ -267,12 +331,13 @@ def evaluate(input_csv: Path) -> tuple[dict[str, Any], pd.DataFrame]:
         "interval": [START_UTC.isoformat(), END_UTC.isoformat()],
         "execution": {
             "round_trip_fee_bps": ROUND_TRIP_FEE_BPS,
-            "spread_proxy": "one date-correct tick",
+            "spread_proxy": "one date-correct tick at entry time",
             "stress": "one additional date-correct tick",
             "take_profit": TP,
             "stop_loss": SL,
             "max_hold_bars": HOLD_BARS,
             "same_bar_order": "STOP_FIRST",
+            "missing_candles": "signal/execution path ineligible; no imputation",
         },
         "pooled": pooled,
         "stress": stress,
@@ -289,6 +354,8 @@ def evaluate(input_csv: Path) -> tuple[dict[str, Any], pd.DataFrame]:
             "seed": BOOTSTRAP_SEED,
             "samples": BOOTSTRAP_SAMPLES,
             "block_days": BLOCK_DAYS,
+            "calendar_days_in_span": len(bootstrap_days),
+            "no_trade_days_preserved": True,
             "lb05_mean_net_return": lb05,
         },
         "gate_checks": gates,

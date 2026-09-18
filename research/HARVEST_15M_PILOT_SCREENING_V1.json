@@ -1,0 +1,39 @@
+{
+  "status": "EXPOSED_DEVELOPMENT_ONLY",
+  "window": "approximately 2026-08-27 through 2026-09-17",
+  "cost_assumption_bps": 15.0,
+  "notes": [
+    "These pilot results are not validation evidence.",
+    "The exact new BOX-EDGE SHOCK REVERSION v1 contract was frozen after these screening results and must be evaluated on an untouched interval.",
+    "Production and live trading remain unchanged."
+  ],
+  "asset_results": [
+    {"arm":"BOX","btc_regime":"RANGE","symbol":"ARB","n":27,"mean_net_bps":17.03,"win_pct":55.6},
+    {"arm":"BOX","btc_regime":"RANGE","symbol":"ENA","n":24,"mean_net_bps":19.50,"win_pct":62.5},
+    {"arm":"BOX","btc_regime":"RANGE","symbol":"NEAR","n":37,"mean_net_bps":-39.88,"win_pct":40.5},
+    {"arm":"BOX","btc_regime":"STRONG_DOWN","symbol":"ARB","n":20,"mean_net_bps":7.75,"win_pct":40.0},
+    {"arm":"BOX","btc_regime":"STRONG_DOWN","symbol":"ENA","n":6,"mean_net_bps":11.36,"win_pct":50.0},
+    {"arm":"BOX","btc_regime":"STRONG_DOWN","symbol":"NEAR","n":29,"mean_net_bps":24.39,"win_pct":51.7},
+    {"arm":"BOX","btc_regime":"TRANSITION","symbol":"ARB","n":55,"mean_net_bps":3.73,"win_pct":50.9},
+    {"arm":"BOX","btc_regime":"TRANSITION","symbol":"ENA","n":44,"mean_net_bps":14.67,"win_pct":52.3},
+    {"arm":"BOX","btc_regime":"TRANSITION","symbol":"NEAR","n":65,"mean_net_bps":-12.38,"win_pct":50.8},
+    {"arm":"Z2","btc_regime":"RANGE","symbol":"ARB","n":48,"mean_net_bps":27.98,"win_pct":58.3},
+    {"arm":"Z2","btc_regime":"RANGE","symbol":"ENA","n":43,"mean_net_bps":16.39,"win_pct":55.8},
+    {"arm":"Z2","btc_regime":"RANGE","symbol":"NEAR","n":58,"mean_net_bps":-26.47,"win_pct":34.5},
+    {"arm":"Z2","btc_regime":"STRONG_DOWN","symbol":"ARB","n":35,"mean_net_bps":-11.71,"win_pct":37.1},
+    {"arm":"Z2","btc_regime":"STRONG_DOWN","symbol":"ENA","n":20,"mean_net_bps":-10.08,"win_pct":35.0},
+    {"arm":"Z2","btc_regime":"STRONG_DOWN","symbol":"NEAR","n":32,"mean_net_bps":22.86,"win_pct":46.9},
+    {"arm":"Z2","btc_regime":"TRANSITION","symbol":"ARB","n":81,"mean_net_bps":-42.86,"win_pct":40.7},
+    {"arm":"Z2","btc_regime":"TRANSITION","symbol":"ENA","n":74,"mean_net_bps":11.15,"win_pct":51.4},
+    {"arm":"Z2","btc_regime":"TRANSITION","symbol":"NEAR","n":84,"mean_net_bps":-6.06,"win_pct":58.3}
+  ],
+  "pooled_weighted_results": [
+    {"arm":"BOX","btc_regime":"RANGE","n":88,"weighted_mean_net_bps":-6.2244,"positive_asset_means":2},
+    {"arm":"BOX","btc_regime":"STRONG_DOWN","n":55,"weighted_mean_net_bps":16.9176,"positive_asset_means":3},
+    {"arm":"BOX","btc_regime":"TRANSITION","n":164,"weighted_mean_net_bps":0.2801,"positive_asset_means":2},
+    {"arm":"Z2","btc_regime":"RANGE","n":149,"weighted_mean_net_bps":3.4399,"positive_asset_means":2},
+    {"arm":"Z2","btc_regime":"STRONG_DOWN","n":87,"weighted_mean_net_bps":1.3801,"positive_asset_means":1},
+    {"arm":"Z2","btc_regime":"TRANSITION","n":239,"weighted_mean_net_bps":-13.2033,"positive_asset_means":1}
+  ],
+  "primary_mechanism_lead": "BOX-edge relief/reversion in BTC STRONG_DOWN, because pooled mean remained positive and all three pilot asset means were positive; this is a lead only, not a validated strategy."
+}

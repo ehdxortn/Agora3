@@ -1,0 +1,5 @@
+HARVEST_15M_PRIMARY_V1_1
+btc_parity_passed_run=35406874723
+contamination_gate=clear_for_exact_v1_1
+final_ci_passed_run=35407050024
+open_primary_interval_once=true

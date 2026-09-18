@@ -28,6 +28,38 @@ def test_tick_schedule_pol_override_and_marketwide_change():
     assert schedule.tick("ARB", "2025-07-30T17:00:00Z", 200.0) == 1.0
 
 
+def test_join_causal_uses_bar_open_for_tick_policy():
+    schedule = builder.TickSchedule(ROOT / "research" / "UPBIT_KRW_TICK_SCHEDULE_V1.json")
+    # ARB 100-1000 KRW tick changes at 2025-07-31 02:00 KST == 17:00 UTC.
+    # A bar opening 16:45 UTC still enters under the old 0.1 KRW schedule even
+    # though its decision/close time is exactly the 17:00 UTC boundary.
+    candles = pd.DataFrame(
+        [
+            {
+                "symbol": "ARB",
+                "open_time": pd.Timestamp("2025-07-30T16:45:00Z"),
+                "open": 200.0,
+                "high": 201.0,
+                "low": 199.0,
+                "close": 200.0,
+            }
+        ]
+    )
+    regimes = pd.DataFrame(
+        [
+            {
+                "btc_decision_time": pd.Timestamp("2025-07-30T16:00:00Z"),
+                "er24": 0.1,
+                "ret24": 0.0,
+                "btc_regime": "RANGE",
+            }
+        ]
+    )
+    joined = builder.join_causal(candles, regimes, schedule)
+    assert joined.iloc[0]["decision_time"] == pd.Timestamp("2025-07-30T17:00:00Z")
+    assert joined.iloc[0]["tick_krw"] == 0.1
+
+
 def test_btc_regime_is_known_only_after_completed_4h_bar():
     start = pd.Timestamp("2025-01-01T00:00:00Z")
     rows = []
@@ -101,3 +133,36 @@ def test_same_asset_positions_do_not_overlap():
     f.at[37, "primary_signal"] = True
     trades = evaluator.simulate_asset(f, "primary_signal")
     assert len(trades) == 1
+
+
+def test_missing_candle_inside_signal_history_blocks_signal():
+    raw = synthetic_asset_frame()
+    raw.loc[20:, "open_time"] = raw.loc[20:, "open_time"] + pd.Timedelta(minutes=15)
+    raw.loc[20:, "decision_time"] = raw.loc[20:, "decision_time"] + pd.Timedelta(minutes=15)
+    f = evaluator.prepare_asset(raw)
+    assert not bool(f.at[35, "history_contiguous_32"])
+    assert not bool(f.at[35, "primary_signal"])
+
+
+def test_missing_next_bar_or_horizon_skips_execution():
+    f = evaluator.prepare_asset(synthetic_asset_frame())
+    f.loc[:, "primary_signal"] = False
+    f.at[34, "primary_signal"] = True
+    # Break next-bar causality: signal decision is 08:45, but entry row now
+    # opens at 09:00. The evaluator must skip rather than jump the gap.
+    f.at[35, "open_time"] = f.at[35, "open_time"] + pd.Timedelta(minutes=15)
+    assert evaluator.simulate_asset(f, "primary_signal") == []
+
+
+def test_calendar_block_clusters_preserve_no_trade_days():
+    trades = pd.DataFrame(
+        {
+            "entry_time": pd.to_datetime(["2025-01-01T01:00:00Z", "2025-01-08T01:00:00Z"], utc=True),
+            "net_return": [0.01, -0.01],
+        }
+    )
+    days, values = evaluator.calendar_day_trade_lists(trades, "net_return")
+    assert len(days) == 8
+    assert values[0] == [0.01]
+    assert values[-1] == [-0.01]
+    assert all(v == [] for v in values[1:-1])

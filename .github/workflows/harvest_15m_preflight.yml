@@ -1,0 +1,36 @@
+name: Harvest 15m BTC Parity Preflight
+
+on:
+  push:
+    branches: [research/harvest-15m-v1]
+    paths:
+      - research/HARVEST_15M_PREFLIGHT_TRIGGER
+
+permissions:
+  contents: read
+
+jobs:
+  btc-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Verify public Binance reconstruction equals canonical Supabase BTC 4H
+        run: |
+          mkdir -p harvest_preflight
+          python research/harvest_15m_public_builder_v1.py \
+            --out-dir harvest_preflight \
+            --btc-parity-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harvest-15m-btc-parity-preflight
+          path: harvest_preflight/btc4h_public_parity_v1.json
+          if-no-files-found: error
+          retention-days: 30

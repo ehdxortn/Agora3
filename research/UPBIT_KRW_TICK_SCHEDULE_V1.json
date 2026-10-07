@@ -1,0 +1,79 @@
+{
+  "status": "FROZEN_RESEARCH_INPUT",
+  "created_for": "HARVEST_15M_REGIME_ASSET_CONTRACT_V1",
+  "sources": [
+    {
+      "url": "https://docs.upbit.com/kr/docs/krw-market-info",
+      "claim": "All KRW market tick policy changed on 2025-07-31; current tick table."
+    },
+    {
+      "url": "https://docs.upbit.com/kr/changelog/krw_tick_unit_change",
+      "claim": "From 2024-10-14, 16 named KRW assets including POL changed the 100-1000 KRW tick from 0.1 KRW to 1 KRW; other price bands unchanged."
+    }
+  ],
+  "universe": ["ARB","ENA","NEAR","POL","ONDO","SUI"],
+  "rules": [
+    {
+      "effective_from": "1900-01-01T00:00:00+09:00",
+      "effective_until": "2024-10-14T00:00:00+09:00",
+      "assets": "ALL_RESEARCH_UNIVERSE",
+      "bands": [
+        {"min_krw":1000000,"max_krw":null,"tick_krw":500},
+        {"min_krw":500000,"max_krw":1000000,"tick_krw":100},
+        {"min_krw":100000,"max_krw":500000,"tick_krw":50},
+        {"min_krw":10000,"max_krw":100000,"tick_krw":10},
+        {"min_krw":1000,"max_krw":10000,"tick_krw":1},
+        {"min_krw":100,"max_krw":1000,"tick_krw":0.1},
+        {"min_krw":10,"max_krw":100,"tick_krw":0.01},
+        {"min_krw":1,"max_krw":10,"tick_krw":0.001},
+        {"min_krw":0.1,"max_krw":1,"tick_krw":0.0001},
+        {"min_krw":0.01,"max_krw":0.1,"tick_krw":0.00001},
+        {"min_krw":0.001,"max_krw":0.01,"tick_krw":0.000001},
+        {"min_krw":0.0001,"max_krw":0.001,"tick_krw":0.0000001},
+        {"min_krw":0,"max_krw":0.0001,"tick_krw":0.00000001}
+      ]
+    },
+    {
+      "effective_from": "2024-10-14T00:00:00+09:00",
+      "effective_until": "2025-07-31T02:00:00+09:00",
+      "assets": ["POL"],
+      "override": {"min_krw":100,"max_krw":1000,"tick_krw":1},
+      "inherit_other_bands_from_previous_rule": true
+    },
+    {
+      "effective_from": "2024-10-14T00:00:00+09:00",
+      "effective_until": "2025-07-31T02:00:00+09:00",
+      "assets": ["ARB","ENA","NEAR","ONDO","SUI"],
+      "inherit_previous_rule": true
+    },
+    {
+      "effective_from": "2025-07-31T02:00:00+09:00",
+      "effective_until": null,
+      "assets": "ALL_RESEARCH_UNIVERSE",
+      "bands": [
+        {"min_krw":2000000,"max_krw":null,"tick_krw":1000},
+        {"min_krw":1000000,"max_krw":2000000,"tick_krw":1000},
+        {"min_krw":500000,"max_krw":1000000,"tick_krw":500},
+        {"min_krw":100000,"max_krw":500000,"tick_krw":100},
+        {"min_krw":50000,"max_krw":100000,"tick_krw":50},
+        {"min_krw":10000,"max_krw":50000,"tick_krw":10},
+        {"min_krw":5000,"max_krw":10000,"tick_krw":5},
+        {"min_krw":1000,"max_krw":5000,"tick_krw":1},
+        {"min_krw":100,"max_krw":1000,"tick_krw":1},
+        {"min_krw":10,"max_krw":100,"tick_krw":0.1},
+        {"min_krw":1,"max_krw":10,"tick_krw":0.01},
+        {"min_krw":0.1,"max_krw":1,"tick_krw":0.001},
+        {"min_krw":0.01,"max_krw":0.1,"tick_krw":0.0001},
+        {"min_krw":0.001,"max_krw":0.01,"tick_krw":0.00001},
+        {"min_krw":0.0001,"max_krw":0.001,"tick_krw":0.000001},
+        {"min_krw":0.00001,"max_krw":0.0001,"tick_krw":0.0000001},
+        {"min_krw":0,"max_krw":0.00001,"tick_krw":0.00000001}
+      ]
+    }
+  ],
+  "notes": [
+    "The 2025-07-31 market-wide change became effective after the KRW maintenance window; this artifact freezes 02:00 KST as the post-maintenance boundary documented by the completed maintenance notice.",
+    "USDT/KRW and USDC/KRW special 2025-03-21 policy is irrelevant to this six-asset universe.",
+    "Backtests must use price-band and effective-date logic. Current tick sizes must never be applied to pre-change candles."
+  ]
+}

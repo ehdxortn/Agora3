@@ -1,0 +1,76 @@
+name: Harvest 15m Primary Validation v1.1
+
+on:
+  push:
+    branches: [research/harvest-15m-v1]
+    paths:
+      - research/HARVEST_15M_PRIMARY_TRIGGER_V1_1
+
+permissions:
+  contents: read
+
+jobs:
+  primary-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile frozen Harvest research code
+        run: python -m compileall -q research tests
+      - name: Run Harvest regression tests before opening outcomes
+        run: pytest -q tests/test_harvest_15m_v1.py tests/test_harvest_15m_public_builder_v1.py
+      - name: Build parity-gated independent 15m dataset
+        run: |
+          mkdir -p harvest_primary_v1_1
+          python research/harvest_15m_public_builder_v1.py \
+            --out-dir harvest_primary_v1_1
+      - name: Execute frozen one-shot primary evaluator
+        run: |
+          python research/harvest_15m_evaluator_v1.py \
+            --input harvest_primary_v1_1/upbit_15m_regime_v1.csv \
+            --output harvest_primary_v1_1/HARVEST_15M_PRIMARY_RESULT_V1_1.json \
+            --trades-output harvest_primary_v1_1/HARVEST_15M_PRIMARY_TRADES_V1_1.csv
+      - name: Record execution provenance
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('harvest_primary_v1_1')
+          files = {}
+          for p in sorted(root.iterdir()):
+              if p.is_file():
+                  files[p.name] = {
+                      'bytes': p.stat().st_size,
+                      'sha256': hashlib.sha256(p.read_bytes()).hexdigest(),
+                  }
+          payload = {
+              'workflow': 'Harvest 15m Primary Validation v1.1',
+              'git_sha': os.environ.get('GITHUB_SHA'),
+              'contract': 'HARVEST_15M_REGIME_ASSET_CONTRACT_V1',
+              'freeze': 'HARVEST_15M_EVALUATOR_FREEZE_V1_1',
+              'one_shot': True,
+              'files': files,
+          }
+          (root / 'EXECUTION_PROVENANCE_V1_1.json').write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harvest-15m-primary-v1-1
+          path: |
+            harvest_primary_v1_1/btc4h_public_parity_v1.json
+            harvest_primary_v1_1/upbit_15m_regime_v1_audit.json
+            harvest_primary_v1_1/HARVEST_15M_PRIMARY_RESULT_V1_1.json
+            harvest_primary_v1_1/HARVEST_15M_PRIMARY_TRADES_V1_1.csv
+            harvest_primary_v1_1/EXECUTION_PROVENANCE_V1_1.json
+          if-no-files-found: warn
+          retention-days: 90

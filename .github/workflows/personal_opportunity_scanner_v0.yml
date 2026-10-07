@@ -1,0 +1,31 @@
+name: Personal Opportunity Scanner V0
+on:
+  push:
+    branches: [research/personal-trading-copilot-v2]
+    paths: [research/OPPORTUNITY_SCANNER_V0_TRIGGER]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shadow-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install pandas==2.3.2 numpy==2.2.6
+      - name: Run shadow scanner
+        run: |
+          mkdir -p scanner_v0
+          python research/personal_opportunity_scanner_v0.py --out-dir scanner_v0 --top-n 20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personal-opportunity-scanner-v0
+          path: |
+            scanner_v0/scanner_v0.json
+            scanner_v0/scanner_v0.csv
+          if-no-files-found: error
+          retention-days: 7

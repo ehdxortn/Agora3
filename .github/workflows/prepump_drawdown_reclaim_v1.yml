@@ -1,0 +1,48 @@
+name: PrePump Drawdown Reclaim V1 Replication
+
+on:
+  push:
+    branches:
+      - research/personal-trading-copilot-v2
+    paths:
+      - research/PREPUMP_V1_TRIGGER
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replicate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install research dependencies
+        run: pip install pandas==2.3.2 numpy==2.2.6
+
+      - name: Compile frozen replication
+        run: |
+          python -m py_compile research/prepump_drawdown_reclaim_v1.py
+          python -m py_compile research/harvest_15m_public_builder_v1.py
+
+      - name: Run independent public-data replication
+        run: |
+          mkdir -p prepump_v1_replication
+          python research/prepump_drawdown_reclaim_v1.py \
+            --out-dir prepump_v1_replication
+
+      - name: Upload immutable research artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prepump-drawdown-reclaim-v1-replication
+          path: |
+            prepump_v1_replication/PREPUMP_DRAWDOWN_RECLAIM_V1_RESULT.json
+            prepump_v1_replication/PREPUMP_DRAWDOWN_RECLAIM_V1_AUDIT.json
+            prepump_v1_replication/PREPUMP_DRAWDOWN_RECLAIM_V1_CANDIDATES.csv
+          if-no-files-found: error
+          retention-days: 30

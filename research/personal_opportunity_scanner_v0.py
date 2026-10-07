@@ -84,6 +84,6 @@ def main():
     out={"scanner":"PERSONAL_OPPORTUNITY_SCANNER_V0","mode":"SHADOW_ONLY","generated_at":pd.Timestamp.now(tz="UTC").isoformat(),"dual_listed_count":len(dual),"inspected":len(rows),"results":rows,"errors":errors,"warning":"Research snapshot only; V1 flag is not validated as a standalone trading signal."}
     (a.out_dir/"scanner_v0.json").write_text(json.dumps(out,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     pd.DataFrame(rows).to_csv(a.out_dir/"scanner_v0.csv",index=False)
-    print(json.dumps({"dual":len(dual),"inspected":len(rows),"v1_candidates":[x["symbol"] for x in rows if x["state"]=="DRAWDOWN_RECLAIM_V1"],"late":sum(x["state"]=="LATE_ALREADY_MOVED" for x in rows),"errors":errors},ensure_ascii=False))
+    print(json.dumps({"dual":len(dual),"inspected":len(rows),"v1_candidates":[x for x in rows if x["state"]=="DRAWDOWN_RECLAIM_V1"],"late":sum(x["state"]=="LATE_ALREADY_MOVED" for x in rows),"errors":errors},ensure_ascii=False))
 
 if __name__=="__main__": main()

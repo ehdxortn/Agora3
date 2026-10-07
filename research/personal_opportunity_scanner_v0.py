@@ -64,7 +64,7 @@ def inspect(symbol,meta,bt):
     flag=(r4<.03 and d<=DIST and r1>0 and pos is not None and pos>=.25)
     state="DRAWDOWN_RECLAIM_V1" if flag else ("LATE_ALREADY_MOVED" if r4>=.03 else "OBSERVE")
     t=meta.get("ticker",{})
-    return {"symbol":symbol,"state":state,"price_krw":c,"ret15":r15,"ret1":r1,"ret4":r4,"dist_prior24_high":d,"range_pos24":pos,"upbit_15m_activity":a15,"upbit_1h_activity":a1,"binance_ret1":br1,"binance_minus_upbit_ret1":br1-r1,"upbit_24h_value_krw":float(t.get("acc_trade_price_24h") or 0),"binance_24h_quote_usdt":float(bt.get("quoteVolume") or 0),"validated_signal":False}
+    return {"symbol":symbol,"state":state,"price_krw":c,"ret15":r15,"ret1":r1,"ret4":r4,"dist_prior24_high":d,"range_pos24":pos,"upbit_15m_activity":a15,"upbit_1h_activity":a1,"binance_ret1":br1,"binance_minus_upbit_ret1":br1-r1,"upbit_24h_value_krw":float(t.get("acc_trade_price_24h") or 0),"binance_24h_quote_usdt":float(bt.get("quoteVolume") or 0),"precursor_family_validated":True,"standalone_trade_signal":False}
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--out-dir",type=Path,required=True); ap.add_argument("--top-n",type=int,default=20)

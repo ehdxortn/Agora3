@@ -21,12 +21,49 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from harvest_15m_public_builder_v1 import (
-    archive_timestamp_to_utc,
-    month_range,
-    robust_get_bytes,
-    robust_get_json,
-)
+def robust_get_bytes(url: str, timeout: float = 45.0, attempts: int = 8) -> bytes:
+    last: Exception | None = None
+    for attempt in range(attempts):
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "*/*", "User-Agent": "Agora3-PrePumpResearch/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            last = exc
+            if exc.code != 429 and not (500 <= exc.code < 600):
+                raise
+            retry_after = exc.headers.get("Retry-After")
+            try:
+                wait = float(retry_after) if retry_after else 0.0
+            except ValueError:
+                wait = 0.0
+            time.sleep(max(wait, min(0.5 * (2**attempt), 8.0)))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last = exc
+            if attempt >= attempts - 1:
+                raise
+            time.sleep(min(0.5 * (2**attempt), 8.0))
+    raise last or RuntimeError(f"failed GET {url}")
+
+
+def robust_get_json(url: str, timeout: float = 30.0, attempts: int = 8) -> Any:
+    return json.loads(robust_get_bytes(url, timeout=timeout, attempts=attempts).decode("utf-8"))
+
+
+def archive_timestamp_to_utc(raw: str | int) -> pd.Timestamp:
+    value = int(raw)
+    unit = "us" if abs(value) >= 100_000_000_000_000 else "ms"
+    return pd.to_datetime(value, unit=unit, utc=True)
+
+
+def month_range(start: pd.Timestamp, end_exclusive: pd.Timestamp) -> list[str]:
+    first = start.tz_convert(None).to_period("M")
+    last = (end_exclusive - pd.Timedelta(seconds=1)).tz_convert(None).to_period("M")
+    return [str(p) for p in pd.period_range(first, last, freq="M")]
+
 
 START = pd.Timestamp("2024-01-01T00:00:00Z")
 END = pd.Timestamp("2026-01-01T00:00:00Z")

@@ -1,2 +1,2 @@
 trigger independent public-data replication for PREPUMP_DRAWDOWN_RECLAIM_V1
-retry=2 reason=no-supabase-dependency
+retry=3 reason=urllib-request-import

@@ -1,0 +1,37 @@
+name: PrePump Strong Reclaim V2 Test
+on:
+  push:
+    branches: [research/personal-trading-copilot-v2]
+    paths: [research/PREPUMP_V2_TRIGGER]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  test-v2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas==2.3.2
+      - name: Download immutable V1 replication artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: prepump-drawdown-reclaim-v1-replication
+          path: v1_artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 37600022411
+      - name: Run frozen V2 stage-2 test
+        run: |
+          python research/prepump_strong_reclaim_v2.py \
+            --v1-candidates v1_artifact/PREPUMP_DRAWDOWN_RECLAIM_V1_CANDIDATES.csv \
+            --output PREPUMP_STRONG_RECLAIM_V2_RESULT.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prepump-strong-reclaim-v2-result
+          path: PREPUMP_STRONG_RECLAIM_V2_RESULT.json
+          if-no-files-found: error
+          retention-days: 30
